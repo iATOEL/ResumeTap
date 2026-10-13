@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>简历智能筛选与评估系统</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+    <link rel="stylesheet" href="/static/css/style.css">
+</head>
+<body class="bg-gray-50 min-h-screen">
+    <!-- 顶部导航 -->
+    <header class="bg-gradient-to-r from-blue-600 to-indigo-700 text-white shadow-lg">
+        <div class="max-w-7xl mx-auto px-4 py-5">
+            <h1 class="text-2xl font-bold">简历智能筛选与评估系统</h1>
+            <p class="text-blue-100 text-sm mt-1">AI驱动的多维度人才评估平台</p>
+        </div>
+    </header>
+
+    <main class="max-w-7xl mx-auto px-4 py-8">
+        <!-- 上传区域 -->
+        <section class="mb-8">
+            <div id="dropZone" class="border-2 border-dashed border-blue-300 rounded-xl p-10 text-center bg-white hover:border-blue-500 transition-colors cursor-pointer">
+                <svg class="mx-auto h-12 w-12 text-blue-400 mb-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/>
+                </svg>
+                <p class="text-gray-600 text-lg">拖拽 .docx 简历文件到此处，或 <span class="text-blue-600 font-medium">点击选择文件</span></p>
+                <p class="text-gray-400 text-sm mt-2">仅支持 .docx 格式</p>
+                <input type="file" id="fileInput" class="hidden" accept=".docx" multiple>
+            </div>
+            <!-- 上传进度 -->
+            <div id="uploadProgress" class="hidden mt-4 bg-white rounded-lg p-4 shadow-sm">
+                <div class="flex items-center gap-3">
+                    <div class="animate-spin h-5 w-5 border-2 border-blue-500 border-t-transparent rounded-full"></div>
+                    <span id="progressText" class="text-gray-600">正在处理...</span>
+                </div>
+                <div class="w-full bg-gray-200 rounded-full h-2 mt-3">
+                    <div id="progressBar" class="bg-blue-600 h-2 rounded-full transition-all duration-300" style="width: 0%"></div>
+                </div>
+            </div>
+        </section>
+
+        <!-- 统计概览 -->
+        <section class="grid grid-cols-1 md:grid-cols-5 gap-4 mb-8">
+            <div class="bg-white rounded-lg p-4 shadow-sm text-center">
+                <p class="text-3xl font-bold text-blue-600" id="statTotal">0</p>
+                <p class="text-gray-500 text-sm">总人数</p>
+            </div>
+            <div class="bg-white rounded-lg p-4 shadow-sm text-center">
+                <p class="text-3xl font-bold text-green-600" id="statStrong">0</p>
+                <p class="text-gray-500 text-sm">强烈推荐</p>
+            </div>
+            <div class="bg-white rounded-lg p-4 shadow-sm text-center">
+                <p class="text-3xl font-bold text-blue-500" id="statRecommend">0</p>
+                <p class="text-gray-500 text-sm">推荐</p>
+            </div>
+            <div class="bg-white rounded-lg p-4 shadow-sm text-center">
+                <p class="text-3xl font-bold text-yellow-500" id="statPending">0</p>
+                <p class="text-gray-500 text-sm">待定</p>
+            </div>
+            <div class="bg-white rounded-lg p-4 shadow-sm text-center">
+                <p class="text-3xl font-bold text-red-500" id="statReject">0</p>
+                <p class="text-gray-500 text-sm">不推荐</p>
+            </div>
+        </section>
+
+        <!-- 图表区域 -->
+        <section class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-8">
+            <div class="bg-white rounded-lg p-6 shadow-sm">
+                <h3 class="text-lg font-semibold text-gray-800 mb-4">综合竞争力排行榜</h3>
+                <div class="relative h-[300px]">
+                    <canvas id="barChart"></canvas>
+                </div>
+            </div>
+            <div class="bg-white rounded-lg p-6 shadow-sm">
+                <h3 class="text-lg font-semibold text-gray-800 mb-4">能力雷达图</h3>
+                <div class="flex gap-2 mb-3 flex-wrap" id="radarSelector"></div>
+                <div class="relative h-[280px]">
+                    <canvas id="radarChart"></canvas>
+                </div>
+            </div>
+        </section>
+
+        <!-- 筛选与排序 -->
+        <section class="bg-white rounded-lg p-4 shadow-sm mb-4 flex flex-wrap gap-4 items-center">
+            <div>
+                <label class="text-sm text-gray-500 mr-2">排序依据：</label>
+                <select id="sortBy" class="border rounded px-3 py-1.5 text-sm">
+                    <option value="overall_score">综合得分</option>
+                    <option value="education_score">学历得分</option>
+                    <option value="experience_score">经验得分</option>
+                    <option value="project_score">项目得分</option>
+                    <option value="skill_score">技能得分</option>
+                    <option value="created_at">上传时间</option>
+                </select>
+            </div>
+            <div>
+                <label class="text-sm text-gray-500 mr-2">排序方式：</label>
+                <select id="sortOrder" class="border rounded px-3 py-1.5 text-sm">
+                    <option value="desc">降序</option>
+                    <option value="asc">升序</option>
+                </select>
+            </div>
+            <div>
+                <label class="text-sm text-gray-500 mr-2">分类筛选：</label>
+                <select id="filterCategory" class="border rounded px-3 py-1.5 text-sm">
+                    <option value="">全部</option>
+                    <option value="强烈推荐">强烈推荐</option>
+                    <option value="推荐">推荐</option>
+                    <option value="待定">待定</option>
+                    <option value="不推荐">不推荐</option>
+                </select>
+            </div>
+        </section>
+
+        <!-- 候选人表格 -->
+        <section class="bg-white rounded-lg shadow-sm overflow-hidden">
+            <div class="overflow-x-auto">
+                <table class="w-full">
+                    <thead class="bg-gray-50">
+                        <tr>
+                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">排名</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">姓名</th>
+                            <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">学历</th>
+                            <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">学历分</th>
+                            <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">经验分</th>
+                            <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">项目分</th>
+                            <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">技能分</th>
+                            <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">综合分</th>
+                            <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">分类</th>
+                            <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">操作</th>
+                        </tr>
+                    </thead>
+                    <tbody id="candidateTable" class="divide-y divide-gray-100">
+                        <tr><td colspan="10" class="px-4 py-8 text-center text-gray-400">暂无数据，请上传简历</td></tr>
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+
+    <!-- 详情弹窗 -->
+    <div id="detailModal" class="fixed inset-0 bg-black/50 hidden items-center justify-center z-50">
+        <div class="bg-white rounded-xl max-w-2xl w-full mx-4 max-h-[80vh] overflow-y-auto p-6">
+            <div class="flex justify-between items-center mb-4">
+                <h3 id="modalTitle" class="text-xl font-bold text-gray-800"></h3>
+                <button onclick="closeModal()" class="text-gray-400 hover:text-gray-600 text-2xl">&times;</button>
+            </div>
+            <div id="modalContent"></div>
+        </div>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
