@@ -104,20 +104,42 @@ def detect_role(ext: extractor.Extracted) -> tuple[str, float]:
 
 
 def resolve_role(ext: extractor.Extracted, config: dict) -> str:
-    """返回本次评分使用的岗位画像。
+    """返回本次评分使用的岗位画像 key。
 
-    role 为空表示用户尚未选择岗位，此时按 auto 处理并在结果中标记未选择。
+    role 为空表示用户尚未选择岗位；auto 表示按简历内容推断；
+    custom 表示使用用户在设置里自定义的岗位关键词。
     """
     role = str(config.get("role") or "").strip()
+    if role == "custom":
+        return "custom"
     if role in {"auto", ""}:
         detected, _ = detect_role(ext)
         return detected
     return role if role in ROLE_PROFILES else "general"
 
 
+def role_label(role_key: str, config: dict) -> str:
+    """岗位展示名。"""
+    if role_key == "custom":
+        label = str((config.get("custom_role") or {}).get("label") or "").strip()
+        return label or "自定义岗位"
+    return ROLE_PROFILES.get(role_key, {}).get("label", "未指定")
+
+
+def role_keywords(role_key: str, config: dict) -> dict[str, float]:
+    """岗位关键词权重表。自定义岗位按用户填的词派生权重。"""
+    if role_key == "custom":
+        words = [w for w in (config.get("custom_role") or {}).get("keywords") or [] if w]
+        # 用户没写权重，统一给 2.5；越靠前越重要
+        return {word: max(1.5, 3.0 - index * 0.15) for index, word in enumerate(words[:40])}
+    return ROLE_PROFILES.get(role_key, ROLE_PROFILES["general"])["keywords"]
+
+
 def role_is_chosen(config: dict) -> bool:
     role = str(config.get("role") or "").strip()
-    return bool(role) and role in ROLE_PROFILES or role == "auto"
+    if role == "custom":
+        return bool((config.get("custom_role") or {}).get("keywords"))
+    return bool(role) and (role in ROLE_PROFILES or role == "auto")
 
 
 def _ratio_score(hit_weight: float, total_weight: float, gain: float = 1.25) -> float:
@@ -127,7 +149,7 @@ def _ratio_score(hit_weight: float, total_weight: float, gain: float = 1.25) -> 
     return _clamp(ratio * 100 * gain)
 
 
-def score_skill(ext: extractor.Extracted, role_key: str) -> Dimension:
+def score_skill(ext: extractor.Extracted, role_key: str, config: dict) -> Dimension:
     skills = ext.skills
     distinct = len(skills)
     if distinct == 0:
@@ -140,7 +162,7 @@ def score_skill(ext: extractor.Extracted, role_key: str) -> Dimension:
     categories = {hit.category for hit in skills.values()}
     breadth = min(8.0, max(0, len(categories) - 2) * 1.6)
 
-    role_terms = {term.lower() for term in ROLE_PROFILES.get(role_key, {}).get("keywords", {})}
+    role_terms = {term.lower() for term in role_keywords(role_key, config)}
     core_hits = [name for name, hit in skills.items() if name.lower() in role_terms]
     core_bonus = min(10.0, len(core_hits) * 1.8)
 
@@ -297,8 +319,8 @@ def score_keywords(ext: extractor.Extracted, config: dict) -> Dimension:
 
 
 def score_job_match(ext: extractor.Extracted, config: dict, role_key: str) -> Dimension:
-    role = ROLE_PROFILES.get(role_key, ROLE_PROFILES["general"])
-    keywords: dict[str, float] = role["keywords"]
+    keywords: dict[str, float] = role_keywords(role_key, config)
+    label = role_label(role_key, config)
 
     haystack = "\n".join([ext.skill_text, ext.experience_text, ext.project_text,
                           ext.summary_text, ext.education_text]) or ""
@@ -316,7 +338,7 @@ def score_job_match(ext: extractor.Extracted, config: dict, role_key: str) -> Di
 
     score = _ratio_score(hit_weight, total_weight, gain=0.92)
     mode = "自动识别" if config.get("role") in {"auto", ""} else "指定"
-    detail = f"{mode}岗位「{role['label']}」，核心要求命中 {len(hits)}/{len(keywords)} 项"
+    detail = f"{mode}岗位「{label}」，核心要求命中 {len(hits)}/{len(keywords)} 项"
     return Dimension("job_match", score, 0.0, detail, hits)
 
 
@@ -372,7 +394,7 @@ def evaluate(text: str, filename: str, config: dict) -> dict:
     role_key = resolve_role(ext, config)
 
     dimensions = [
-        score_skill(ext, role_key),
+        score_skill(ext, role_key, config),
         score_experience(ext, config),
         score_education(ext, config),
         score_project(ext, config),
@@ -415,7 +437,7 @@ def evaluate(text: str, filename: str, config: dict) -> dict:
     status, screen_reasons = screen(ext, overall, config)
 
     summary = _build_summary(ext, overall, rarity, dimensions)
-    strengths, weaknesses = _build_verdicts(ext, dimensions, role_key, overall)
+    strengths, weaknesses = _build_verdicts(ext, dimensions, role_key, overall, config)
     return {
         "name": ext.name,
         "filename": filename,
@@ -428,7 +450,7 @@ def evaluate(text: str, filename: str, config: dict) -> dict:
         "weaknesses": weaknesses,
         "news_flash": _build_news_flash(ext, overall, rarity, strengths, weaknesses),
         "detected_role": role_key,
-        "detected_role_label": ROLE_PROFILES[role_key]["label"],
+        "detected_role_label": role_label(role_key, config),
         "role_selected": role_is_chosen(config),
         "early_career_adjusted": early_applied,
         "dimensions": [dim.to_dict() for dim in dimensions],
@@ -463,7 +485,8 @@ def evaluate(text: str, filename: str, config: dict) -> dict:
 
 
 def _build_verdicts(ext: extractor.Extracted, dims: list[Dimension],
-                    role_key: str, overall: float) -> tuple[list[str], list[str]]:
+                    role_key: str, overall: float,
+                    config: dict) -> tuple[list[str], list[str]]:
     """生成可读的优点 / 缺点，供速筛卡片展示。"""
     strengths: list[str] = []
     weaknesses: list[str] = []
@@ -491,8 +514,8 @@ def _build_verdicts(ext: extractor.Extracted, dims: list[Dimension],
     elif project and project.score >= 52:
         strengths.append(f"有 {len(ext.projects)} 段项目经历可追述")
     if job and job.score >= 70:
-        role_label = ROLE_PROFILES.get(role_key, {}).get("label", "")
-        strengths.append(f"与「{role_label}」岗位要求高度吻合")
+        label = role_label(role_key, config)
+        strengths.append(f"与「{label}」岗位要求高度吻合")
     if ext.management:
         strengths.append("简历体现团队管理职责")
     if not strengths:

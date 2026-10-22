@@ -7,7 +7,7 @@ from pathlib import Path
 # 数据目录名：沿用 Resumegacha 时期的目录，避免老用户升级后数据丢失
 APP_NAME = "ResumeGacha"
 APP_TITLE = "ResumeTap"
-APP_VERSION = "2.2.1"
+APP_VERSION = "2.3.0"
 
 
 def resource_dir() -> Path:

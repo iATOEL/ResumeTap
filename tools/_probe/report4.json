@@ -1,0 +1,16 @@
+{
+  "groups": 6,
+  "role_buttons": 27,
+  "has_custom_btn": true,
+  "title": "ResumeTap",
+  "imported": 12,
+  "card": "张伟",
+  "cards": 12,
+  "select_total": "12",
+  "selected_after_all": "12",
+  "bulk_visible": true,
+  "chk_checked": true,
+  "after_invert": "0",
+  "after_ctrl_a": "12",
+  "errors": []
+}

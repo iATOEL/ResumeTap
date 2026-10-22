@@ -13,8 +13,9 @@ import httpx
 import webview
 
 from . import ai_review, api, config as config_module
+from . import scoring
 from . import paths, services, storage
-from .rules import ROLE_LABELS
+from .rules import ROLE_GROUPS, ROLE_LABELS
 
 log = logging.getLogger("resume_gacha")
 
@@ -52,6 +53,9 @@ class Bridge:
                 stats=services.statistics(),
                 achievements=services.global_stats(),
                 roles=[{"key": k, "label": v} for k, v in ROLE_LABELS.items()],
+                role_groups=[
+                    {"label": label, "keys": keys} for label, keys in ROLE_GROUPS.items()
+                ],
                 meta={
                     "version": paths.APP_VERSION,
                     "data_dir": str(paths.data_dir()),
@@ -188,7 +192,9 @@ class Bridge:
                 log.exception("AI 复核失败")
                 return self._err(f"AI 复核失败：{exc}")
 
-            weights = {d["key"]: d.get("weight", 0.0) for d in payload.get("dimensions", [])}
+            # 权重按当前配置重新计算一次（避免切换岗位后沿用旧权重）
+            fresh = scoring.evaluate(raw_text, payload.get("filename") or data.get("filename", ""), cfg)
+            weights = {d["key"]: d.get("weight", 0.0) for d in fresh.get("dimensions", [])}
             merged = ai_review.apply_to_payload(payload, ai_result, cfg, weights)
             merged["filename"] = payload.get("filename") or data.get("filename", "")
 
@@ -207,33 +213,50 @@ class Bridge:
             return self._err(f"AI 复核失败：{exc}")
 
     def ai_batch_review(self, candidate_ids: list[int] | None = None,
-                        limit: int = 10) -> dict:
-        """批量 AI 复核（顺序执行，避免并发触发限流）。"""
+                        limit: int = 0, only_unreviewed: bool = False) -> dict:
+        """批量 AI 复核。
+
+        limit=0 表示不限制数量（复核全部候选）；only_unreviewed=True 时
+        只处理还没被 AI 复核过的简历。
+        进度通过 window.__aiProgress 回调推给前端。
+        """
         try:
             cfg = self._config()
             if not ai_review.is_ready(cfg):
                 return self._err("AI 复核未启用，请先在设置页填写 API Key 并开启")
 
-            ids = [int(i) for i in candidate_ids] if candidate_ids else None
+            ids = {int(i) for i in candidate_ids} if candidate_ids else None
             targets = []
             for item in storage.list_candidates():
                 if ids is not None and item["id"] not in ids:
                     continue
+                if only_unreviewed:
+                    payload = item.get("payload") or {}
+                    if payload.get("score_source") == "ai":
+                        continue
                 detail = storage.get_candidate(item["id"], include_raw=True)
                 if detail and (detail.get("raw_text") or "").strip():
                     targets.append(detail)
-                if len(targets) >= max(1, min(limit, 50)):
-                    break
+
+            if limit and limit > 0:
+                targets = targets[:limit]
 
             if not targets:
-                return self._err("没有可用于复核的简历（需要已保存原文）")
+                return self._err("没有需要复核的简历（需要已保存原文）")
 
+            total = len(targets)
             done, failed = 0, []
-            for detail in targets:
+            for index, detail in enumerate(targets, start=1):
                 payload = detail.get("payload") or {}
-                role_label = payload.get("detected_role_label") or "未指定"
+                role_label_text = payload.get("detected_role_label") or "未指定"
+                self._ai_progress({
+                    "index": index, "total": total,
+                    "name": detail.get("name") or "",
+                    "stage": "reviewing",
+                })
                 try:
-                    ai_result = ai_review.review_resume(detail["raw_text"], role_label, cfg)
+                    ai_result = ai_review.review_resume(
+                        detail["raw_text"], role_label_text, cfg)
                     weights = {d["key"]: d.get("weight", 0.0)
                                for d in payload.get("dimensions", [])}
                     merged = ai_review.apply_to_payload(payload, ai_result, cfg, weights)
@@ -242,16 +265,60 @@ class Bridge:
                     done += 1
                 except Exception as exc:  # noqa: BLE001
                     failed.append({"id": detail["id"], "name": detail.get("name"),
-                                   "error": str(exc)[:120]})
+                                   "error": str(exc)[:160]})
 
+            self._ai_progress({"index": total, "total": total, "stage": "done"})
             return self._ok(
                 updated=done,
                 failed=failed,
+                total=total,
                 candidates=storage.list_candidates(),
                 stats=services.statistics(),
             )
         except Exception as exc:  # noqa: BLE001
+            log.exception("批量复核失败")
             return self._err(f"批量复核失败：{exc}")
+
+    def _ai_progress(self, payload: dict) -> None:
+        if not self._window:
+            return
+        try:
+            self._window.evaluate_js(
+                "window.__aiProgress && window.__aiProgress(" + _to_js(payload) + ")")
+        except Exception:  # noqa: BLE001
+            pass
+
+    def ai_clear_review(self, candidate_ids: list[int] | None = None) -> dict:
+        """撤销 AI 复核，恢复规则引擎评分。"""
+        try:
+            cfg = self._config()
+            targets = storage.list_candidates()
+            if candidate_ids:
+                wanted = {int(i) for i in candidate_ids}
+                targets = [c for c in targets if c["id"] in wanted]
+
+            restored = 0
+            skipped = 0
+            for item in targets:
+                detail = storage.get_candidate(item["id"], include_raw=True)
+                if not detail:
+                    continue
+                raw_text = detail.get("raw_text") or ""
+                if not raw_text.strip():
+                    skipped += 1
+                    continue
+                try:
+                    payload = scoring.evaluate(raw_text, detail.get("filename", ""), cfg)
+                    storage.update_candidate(item["id"], payload)
+                    restored += 1
+                except Exception:  # noqa: BLE001
+                    skipped += 1
+
+            return self._ok(restored=restored, skipped=skipped,
+                            candidates=storage.list_candidates(),
+                            stats=services.statistics())
+        except Exception as exc:  # noqa: BLE001
+            return self._err(f"撤销失败：{exc}")
 
     def ai_test_connection(self) -> dict:
         """用一条极短请求验证 Key 与地址是否可用。"""

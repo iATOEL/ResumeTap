@@ -11,6 +11,7 @@
     config: null,
     meta: {},
     roles: [],
+    roleGroups: [],
     candidates: [],
     stats: null,
     achievements: {},
@@ -24,6 +25,7 @@
     filterYears: '',
     filterDegree: '',
     selected: new Set(),
+    filteredIds: [],
     queue: [],
     queueIndex: 0,
     current: null,
@@ -144,6 +146,7 @@
     state.config = data.config;
     state.meta = data.meta || {};
     state.roles = data.roles || [];
+    state.roleGroups = data.role_groups || [];
     state.candidates = data.candidates || [];
     state.stats = data.stats;
     state.achievements = data.achievements || {};
@@ -214,6 +217,12 @@
     $('btnExportSelected').addEventListener('click', exportSelected);
     $('btnDeleteSelected').addEventListener('click', deleteSelected);
     $('btnClearSelect').addEventListener('click', () => { state.selected.clear(); renderLibrary(); });
+    $('btnSelectAll').addEventListener('click', selectAllVisible);
+    $('btnInvertSelect').addEventListener('click', invertSelection);
+    $('chkSelectAll').addEventListener('change', (e) => {
+      if (e.target.checked) selectAllVisible();
+      else { state.selected.clear(); renderLibrary(); }
+    });
 
     $('btnCloseDrawer').addEventListener('click', closeDrawer);
     $('drawerMask').addEventListener('click', closeDrawer);
@@ -254,7 +263,9 @@
     });
 
     $('btnAiTest').addEventListener('click', testAiConnection);
-    $('btnAiBatch').addEventListener('click', batchAiReview);
+    $('btnAiBatchAll').addEventListener('click', () => batchAiReview(false));
+    $('btnAiBatchPending').addEventListener('click', () => batchAiReview(true));
+    $('btnAiRevert').addEventListener('click', revertAiReview);
     $('btnAiSidebar').addEventListener('click', () => switchView('settings'));
 
     // 音效
@@ -306,6 +317,13 @@
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
         e.preventDefault();
         $('searchInput').focus();
+        return;
+      }
+      // Ctrl+A：简历库全选（输入框内保留浏览器默认行为）
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'a' && state.view === 'library') {
+        if (typing) return;
+        e.preventDefault();
+        selectAllVisible();
         return;
       }
 
@@ -629,26 +647,100 @@
   }
 
   function needJobHtml() {
-    const roles = (state.roles || []).filter((r) => r.key !== 'general');
+    const groups = state.roleGroups || [];
+    const labelOf = {};
+    (state.roles || []).forEach((r) => { labelOf[r.key] = r.label; });
+
+    const groupsHtml = groups.map((group) => {
+      const keys = group.keys.filter((k) => k !== 'general');
+      if (!keys.length) return '';
+      return `
+        <div class="job-group">
+          <h4>${escapeHtml(group.label)}</h4>
+          <div class="job-options">
+            ${keys.map((k) => `<button class="job-option" data-role="${k}">${escapeHtml(labelOf[k] || k)}</button>`).join('')}
+          </div>
+        </div>`;
+    }).join('');
+
     return `
-      <div class="need-job">
+      <div class="need-job" style="max-width:760px">
         <div class="icon">◎</div>
         <h3>先选择招聘岗位</h3>
         <p>
           不同岗位看重的能力不同。选定岗位后，系统会按该岗位的技能画像与要求评分，
           再把简历排进速筛队列——比混在一起筛要准得多。
         </p>
-        <div class="job-options">
-          ${roles.map((r) => `<button class="job-option" data-role="${r.key}">${escapeHtml(r.label)}</button>`).join('')}
+        ${groupsHtml}
+        <div class="job-options" style="margin-top:8px">
           <button class="job-option" data-role="auto">不确定，自动识别</button>
+          <button class="job-option" data-role="__custom">自定义岗位…</button>
+        </div>
+
+        <div class="custom-role-box hidden" id="customRoleBox">
+          <h4>自定义招聘岗位</h4>
+          <p>适用于列表里没有的岗位。填入岗位名称和该岗位最看重的关键词，系统按这些词评估匹配度。</p>
+          <label class="field">
+            <span>岗位名称</span>
+            <input type="text" id="customRoleLabel" placeholder="例如：短视频编导" maxlength="40">
+          </label>
+          <label class="field">
+            <span>岗位关键词（逗号分隔）</span>
+            <textarea id="customRoleKeywords" rows="2" placeholder="例如：脚本, 拍摄, 剪辑, 选题, 爆款"></textarea>
+          </label>
+          <button class="btn btn-primary btn-block" id="btnSaveCustomRole">使用这个岗位开始评分</button>
         </div>
       </div>`;
   }
 
   function bindJobOptions() {
     $$('#screenStage [data-role]').forEach((btn) => {
-      btn.addEventListener('click', () => chooseJob(btn.dataset.role));
+      btn.addEventListener('click', () => {
+        if (btn.dataset.role === '__custom') {
+          $('customRoleBox').classList.toggle('hidden');
+          $('customRoleLabel').focus();
+          return;
+        }
+        chooseJob(btn.dataset.role);
+      });
     });
+
+    const saveBtn = $('btnSaveCustomRole');
+    if (saveBtn) saveBtn.addEventListener('click', saveCustomRole);
+  }
+
+  async function saveCustomRole() {
+    const label = $('customRoleLabel').value.trim();
+    const keywords = $('customRoleKeywords').value
+      .split(/[,，、\s]+/).map((w) => w.trim()).filter(Boolean);
+
+    if (!label) {
+      toast('请填写岗位名称', 'warn');
+      $('customRoleLabel').focus();
+      return;
+    }
+    if (!keywords.length) {
+      toast('请至少填写一个岗位关键词', 'warn');
+      $('customRoleKeywords').focus();
+      return;
+    }
+
+    try {
+      const updated = {
+        ...state.config,
+        role: 'custom',
+        custom_role: { label, keywords },
+      };
+      const result = await call('save_config', updated);
+      state.config = result.config;
+      applyPayload(result);
+      buildQueue();
+      syncJobPicker();
+      renderAll();
+      toast(`已切换到自定义岗位「${label}」并重新评分`, 'success');
+    } catch (err) {
+      toast(err.message, 'error');
+    }
   }
 
   async function chooseJob(roleKey) {
@@ -1027,30 +1119,88 @@
     text.textContent = ready ? '已启用' : '未启用';
   }
 
-  async function batchAiReview() {
-    const pendingCount = (state.review && state.review.pending) || 0;
+  async function batchAiReview(onlyUnreviewed) {
+    if (!state.aiStatus || !state.aiStatus.ready) {
+      toast('请先在设置页填写 API Key 并启用 AI 复核', 'warn');
+      return;
+    }
+    const total = state.candidates.length;
+    if (!total) {
+      toast('还没有简历', 'warn');
+      return;
+    }
+
+    const scope = onlyUnreviewed ? '尚未 AI 复核的简历' : '全部简历';
     const ok = await confirmDialog(
       '批量 AI 复核',
-      `将对最多 10 份简历调用 AI（优先未评价的）。当前待看 ${pendingCount} 份，会产生相应接口费用。`
+      `将对${scope}逐份调用 AI（共最多 ${total} 份，顺序执行）。` +
+      '这会消耗相应接口额度，耗时取决于简历数量与接口速度。'
     );
     if (!ok) return;
-    const btn = $('btnAiBatch');
-    btn.disabled = true;
-    btn.textContent = '复核中…';
+
+    showAiProgress(0, total, '准备中…');
+    const btns = ['btnAiBatchAll', 'btnAiBatchPending', 'btnAiRevert'];
+    btns.forEach((id) => { const b = $(id); if (b) b.disabled = true; });
+
+    window.__aiProgress = (payload) => {
+      showAiProgress(payload.index || 0, payload.total || total, payload.name || '');
+    };
+
     try {
-      const result = await call('ai_batch_review', null, 10);
+      const result = await call('ai_batch_review', null, 0, onlyUnreviewed);
       applyPayload(result);
       buildQueue();
       renderAll();
+      hideAiProgress();
+
       const failed = result.failed || [];
-      toast(`AI 复核完成 ${result.updated} 份${failed.length ? `，失败 ${failed.length} 份` : ''}`,
+      toast(`AI 复核完成 ${result.updated}/${result.total} 份` +
+            (failed.length ? `，失败 ${failed.length} 份` : ''),
             failed.length ? 'warn' : 'success');
-      failed.slice(0, 3).forEach((f) => toast(`${f.name}：${f.error}`, 'error'));
+      failed.slice(0, 5).forEach((f) => toast(`${f.name}：${f.error}`, 'error'));
     } catch (err) {
+      hideAiProgress();
       toast(err.message, 'error');
     } finally {
-      btn.disabled = false;
-      btn.textContent = '批量复核当前入围';
+      btns.forEach((id) => { const b = $(id); if (b) b.disabled = false; });
+      window.__aiProgress = null;
+    }
+  }
+
+  function showAiProgress(done, total, name) {
+    const overlay = $('aiProgressOverlay');
+    overlay.classList.remove('hidden');
+    const percent = total ? Math.round((done / total) * 100) : 0;
+    $('aiProgressFill').style.width = percent + '%';
+    $('aiProgressText').textContent = `${done} / ${total}`;
+    $('aiProgressName').textContent = name || '';
+  }
+
+  function hideAiProgress() {
+    $('aiProgressOverlay').classList.add('hidden');
+  }
+
+  async function revertAiReview() {
+    const aiCount = state.candidates.filter(
+      (c) => (c.payload || {}).score_source === 'ai').length;
+    if (!aiCount) {
+      toast('当前没有 AI 复核过的简历', 'warn');
+      return;
+    }
+    const ok = await confirmDialog(
+      '撤销 AI 复核',
+      `将把 ${aiCount} 份简历恢复为规则引擎评分（需要已保存原文），AI 意见会被清除。`
+    );
+    if (!ok) return;
+    try {
+      const result = await call('ai_clear_review', null);
+      applyPayload(result);
+      buildQueue();
+      renderAll();
+      toast(`已恢复 ${result.restored} 份${result.skipped ? `，跳过 ${result.skipped} 份（无原文）` : ''}`,
+            'success');
+    } catch (err) {
+      toast(err.message, 'error');
     }
   }
 
@@ -1112,6 +1262,7 @@
   function renderLibrary() {
     const body = $('libraryBody');
     const list = filteredCandidates();
+    state.filteredIds = list.map((item) => item.id);
 
     if (!list.length) {
       body.innerHTML = `
@@ -1172,6 +1323,7 @@
           <div class="person-top">
             <span class="person-name">${escapeHtml(item.name)}</span>
             <span class="rarity-badge ${rarity}">${item.rarity}</span>
+            ${(item.payload && item.payload.score_source === 'ai') ? '<span class="ai-badge">AI</span>' : ''}
             ${verdictChip}
           </div>
           <div class="person-role">
@@ -1190,8 +1342,45 @@
       </div>`;
   }
 
+  /** 全选当前筛选后的列表（不是全库，避免误删被筛选隐藏的简历） */
+  function selectAllVisible() {
+    const list = filteredCandidates();
+    if (!list.length) {
+      toast('当前列表为空，没有可选择的简历', 'warn');
+      return;
+    }
+    list.forEach((item) => state.selected.add(item.id));
+    renderLibrary();
+    toast(`已选中当前列表全部 ${list.length} 份`, 'success');
+  }
+
+  function invertSelection() {
+    const list = filteredCandidates();
+    if (!list.length) return;
+    list.forEach((item) => {
+      if (state.selected.has(item.id)) state.selected.delete(item.id);
+      else state.selected.add(item.id);
+    });
+    renderLibrary();
+  }
+
   function renderBulkBar() {
     const bar = $('bulkBar');
+    const visibleIds = state.filteredIds || [];
+    const visibleSelected = visibleIds.filter((id) => state.selected.has(id)).length;
+
+    // 计数与全选复选框始终同步
+    const totalEl = $('selectTotal');
+    const countEl = $('selectCount');
+    if (totalEl) totalEl.textContent = visibleIds.length;
+    if (countEl) countEl.textContent = state.selected.size;
+
+    const chk = $('chkSelectAll');
+    if (chk) {
+      chk.checked = visibleIds.length > 0 && visibleSelected === visibleIds.length;
+      chk.indeterminate = visibleSelected > 0 && visibleSelected < visibleIds.length;
+    }
+
     if (!state.selected.size) {
       bar.classList.add('hidden');
       return;
@@ -1261,6 +1450,14 @@
         <h4>AI 复核${applied ? '（已替换评分）' : '（仅供参考）'} · ${escapeHtml(ai.model || '')}</h4>
         <div class="api-box" style="border-color:#bcd7ff;background:#f2f7ff">
           ${ai.summary ? `<div style="margin-bottom:8px"><b>结论：</b>${escapeHtml(ai.summary)}</div>` : ''}
+          ${(ai.rules_score != null && applied) ? `
+          <div style="display:flex;gap:14px;margin-bottom:8px;font-size:12.5px">
+            <span>规则引擎：<b>${fmtScore(ai.rules_score)}</b> ${escapeHtml(ai.rules_rarity || '')}</span>
+            <span style="color:var(--primary)">AI 复核：<b>${fmtScore(ai.overall_score)}</b></span>
+            <span style="color:${ai.overall_score >= ai.rules_score ? 'var(--success)' : 'var(--danger)'}">
+              ${ai.overall_score >= ai.rules_score ? '▲' : '▼'} ${Math.abs(ai.overall_score - ai.rules_score).toFixed(1)}
+            </span>
+          </div>` : ''}
           <div style="display:flex;flex-wrap:wrap;gap:6px">
             ${(ai.dimensions || []).map((d) => `<span class="chip">${escapeHtml(d.label)} ${fmtScore(d.score)}</span>`).join('')}
           </div>

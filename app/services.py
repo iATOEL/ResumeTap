@@ -125,12 +125,16 @@ def import_files(paths: Iterable[str], config: dict,
             "total": total}
 
 
-def rescore_all(config: dict) -> dict:
-    """配置变更后重新评分全部简历（不重新解析文件，使用已存原文）。"""
+def rescore_all(config: dict, keep_ai: bool = True) -> dict:
+    """配置变更后重新评分全部简历（不重新解析文件，使用已存原文）。
+
+    keep_ai=True 时，已被 AI 复核过的简历保留 AI 结果，只记录"规则分已更新"，
+    避免切换岗位或改权重把 AI 复核的成果冲掉。
+    """
     with storage.session() as conn:
         rows = conn.execute("SELECT id, raw_text, payload FROM candidates").fetchall()
 
-    updated, skipped = 0, 0
+    updated, skipped, kept_ai = 0, 0, 0
     for row in rows:
         raw_text = row["raw_text"] or ""
         if not raw_text:
@@ -141,12 +145,28 @@ def rescore_all(config: dict) -> dict:
             old = json.loads(row["payload"] or "{}")
             filename = old.get("filename", "")
             payload = scoring.evaluate(raw_text, filename, config)
+
+            if keep_ai and old.get("score_source") == "ai" and old.get("ai_review"):
+                # 保留 AI 的分数与优缺点，但更新岗位标签、院校信息等结构化字段
+                ai_block = old["ai_review"]
+                merged = dict(payload)
+                for key in ("overall_score", "rarity", "rarity_label",
+                            "strengths", "weaknesses", "news_flash", "dimensions"):
+                    if key in old:
+                        merged[key] = old[key]
+                merged["score_source"] = "ai"
+                merged["ai_review"] = ai_block
+                merged["rules_stale"] = True   # 规则分已变化，可提示重新复核
+                storage.update_candidate(row["id"], merged)
+                kept_ai += 1
+                continue
+
             storage.update_candidate(row["id"], payload)
             updated += 1
         except Exception:  # noqa: BLE001
             log.exception("重新评分失败 id=%s", row["id"])
             skipped += 1
-    return {"updated": updated, "skipped": skipped}
+    return {"updated": updated, "skipped": skipped, "kept_ai": kept_ai}
 
 
 def statistics() -> dict:

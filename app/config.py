@@ -61,6 +61,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
         },
     },
     "role": "",
+    # 自定义岗位：role 为 "custom" 时生效
+    "custom_role": {"label": "", "keywords": []},
     "keywords": [],
     "jd_text": "",
     "screening": {
@@ -336,7 +338,15 @@ def normalize(config: dict) -> dict:
     rarity["sr"] = round(sr, 1)
 
     role = str(cfg.get("role") or "").strip()
-    cfg["role"] = role if (role in ROLE_PROFILES or role in {"auto", ""}) else ""
+    cfg["role"] = role if (role in ROLE_PROFILES or role in {"auto", "", "custom"}) else ""
+
+    custom = cfg.get("custom_role") or {}
+    custom_label = str(custom.get("label") or "").strip()[:40]
+    custom_keywords = _as_list(custom.get("keywords"))[:60]
+    cfg["custom_role"] = {"label": custom_label, "keywords": custom_keywords}
+    # 选了自定义岗位但没填关键词 -> 退回未选择，避免评分失真
+    if role == "custom" and not custom_keywords:
+        cfg["role"] = ""
 
     cfg["keywords"] = _as_list(cfg.get("keywords"))[:200]
     cfg["jd_text"] = str(cfg.get("jd_text") or "")[:20000]

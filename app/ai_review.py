@@ -195,6 +195,8 @@ def apply_to_payload(payload: dict, ai_result: dict, config: dict,
     ai_block = {
         "model": ai_result.get("model", ""),
         "overall_score": ai_result["overall_score"],
+        "rules_score": payload.get("overall_score"),   # 规则引擎原分，便于对比
+        "rules_rarity": payload.get("rarity", ""),
         "dimensions": ai_result["dimensions"],
         "strengths": ai_result["strengths"],
         "weaknesses": ai_result["weaknesses"],
@@ -206,13 +208,21 @@ def apply_to_payload(payload: dict, ai_result: dict, config: dict,
     if not replace:
         return merged
 
-    # 替换分数：保留权重以便界面展示贡献
+    # 替换分数：权重沿用规则引擎的配置权重，便于界面展示贡献占比
     weights = ranked_weights or {}
     dims = []
     for dim in ai_result["dimensions"]:
         weight = float(weights.get(dim["key"], 0.0))
-        dims.append({**dim, "weight": round(weight, 4),
-                     "contribution": round(dim["score"] * weight, 2)})
+        dims.append({
+            "key": dim["key"],
+            "label": dim["label"],
+            "score": round(float(dim["score"]), 1),
+            "weight": round(weight, 4),
+            "contribution": round(float(dim["score"]) * weight, 2),
+            "detail": dim.get("detail", ""),
+            "hits": [],
+            "available": True,
+        })
     merged["dimensions"] = dims
     merged["overall_score"] = ai_result["overall_score"]
     merged["rarity"] = config_module.rarity_of(ai_result["overall_score"], config)

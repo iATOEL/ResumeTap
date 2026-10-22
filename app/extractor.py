@@ -129,6 +129,7 @@ class Extracted:
     projects: list[ProjectItem] = field(default_factory=list)
     sections: dict[str, str] = field(default_factory=dict)
     education_text: str = ""
+    education_source: str = "missing"   # education_section / inferred / missing
     experience_text: str = ""
     project_text: str = ""
     skill_text: str = ""
@@ -343,6 +344,38 @@ def _detect_degree(text: str) -> str:
     if not pool:
         return "其他"
     return max(pool, key=lambda item: (item[0], item[1]))[2]
+
+
+def _education_like_lines(text: str, exclude: list[str] | None = None) -> str:
+    """从全文里筛出"像教育经历"的行，用于没有教育章节的简历。
+
+    判定很保守：行内必须同时出现学历词，且有院校/毕业/就读/专业等信号，
+    避免把工作单位（例如"清华大学实验室管理员"）当成学历。
+    """
+    scope = text
+    for block in exclude or []:
+        if block and block.strip():
+            scope = scope.replace(block, "\n")
+
+    degree_words = re.compile(r"博士|硕士|研究生|本科|学士|大专|专科|中专|高中|MBA|EMBA")
+    edu_signal = re.compile(r"大学|学院|学校|毕业|就读|在读|统招|全日制|专业|学位|专升本")
+
+    picked = []
+    for line in scope.splitlines():
+        line = line.strip()
+        if not line or len(line) < 4:
+            continue
+        if _REQUIREMENT_HINT_RE.search(line):
+            continue
+        if not degree_words.search(line):
+            continue
+        if not edu_signal.search(line):
+            continue
+        # 明确是工作描述的跳过
+        if re.search(r"负责|主导|参与|工作职责|任职|入职|离职|公司|团队管理", line):
+            continue
+        picked.append(line)
+    return "\n".join(picked)
 
 
 def _parse_education_entries(text: str, limit: int = 6) -> list[dict]:
@@ -607,8 +640,17 @@ def extract(text: str, filename: str = "") -> Extracted:
     result.years = years
     result.years_source = source
 
+    # 学历只从教育章节读取。没有教育章节时不要拿整份简历去猜——
+    # 否则"在清华大学工作"会被误当成"清华毕业"。
     edu_text = result.education_text
-    edu_scope = edu_text or text
+    if edu_text.strip():
+        edu_scope = edu_text
+        result.education_source = "education_section"
+    else:
+        edu_scope = _education_like_lines(text, exclude=[result.experience_text,
+                                                         result.project_text])
+        result.education_source = "inferred" if edu_scope.strip() else "missing"
+
     result.degree = _detect_degree(edu_scope)
     school, tier, tier_label, bonus = _detect_school(edu_scope)
     result.school = school
