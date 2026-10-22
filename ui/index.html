@@ -1,0 +1,463 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>简历TAP</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<!-- ======================= 顶部导航 ======================= -->
+<header class="app-header">
+  <div class="logo">
+    <div class="logo-mark">T</div>
+    <div class="logo-text">
+      <strong>简历TAP</strong>
+      <span>本地离线</span>
+    </div>
+  </div>
+
+  <div class="job-picker" id="jobPicker">
+    <span class="job-picker-label">招聘岗位</span>
+    <select id="jobSelect" title="选择要招聘的岗位"></select>
+    <span class="job-picker-warn hidden" id="jobWarn">未选择</span>
+  </div>
+
+  <div class="header-search">
+    <span class="search-icon">⌕</span>
+    <input type="search" id="searchInput" placeholder="搜索姓名、技能、院校…" autocomplete="off">
+  </div>
+
+  <nav class="header-nav">
+    <button class="nav-btn active" data-view="screen">
+      <span class="nav-icon">◉</span><span class="label-text">速筛</span>
+      <span class="nav-count hidden" id="pendingCount">0</span>
+    </button>
+    <button class="nav-btn" data-view="library">
+      <span class="nav-icon">▤</span><span class="label-text">简历库</span>
+    </button>
+    <button class="nav-btn" data-view="stats">
+      <span class="nav-icon">▥</span><span class="label-text">统计</span>
+    </button>
+    <button class="nav-btn" data-view="settings">
+      <span class="nav-icon">⚙</span><span class="label-text">设置</span>
+    </button>
+  </nav>
+
+  <div class="header-divider"></div>
+
+  <div class="header-actions">
+    <button class="icon-btn" id="btnImport" title="导入简历 (Ctrl+O)">＋</button>
+    <button class="icon-btn" id="btnExport" title="导出结果">⇩</button>
+    <button class="icon-btn" id="btnSound" title="音效开关">♪</button>
+  </div>
+</header>
+
+<div class="app-body">
+  <!-- ======================= 侧边栏 ======================= -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-section">
+      <div class="sidebar-label">快捷操作</div>
+      <button class="side-item" id="btnImportSide">
+        <span class="side-avatar blue">＋</span>
+        <span class="label-text">导入简历</span>
+      </button>
+      <button class="side-item" id="btnImportFolder">
+        <span class="side-avatar green">▣</span>
+        <span class="label-text">导入文件夹</span>
+      </button>
+      <button class="side-item" id="btnLoadSamples">
+        <span class="side-avatar orange">◎</span>
+        <span class="label-text">载入示例</span>
+      </button>
+    </div>
+
+    <div class="sidebar-section">
+      <div class="sidebar-label">按稀有度</div>
+      <button class="side-item" data-rarity="SSR">
+        <span class="side-avatar orange">S</span>
+        <span class="label-text">SSR 优先</span>
+        <span class="count" id="countSSR">0</span>
+      </button>
+      <button class="side-item" data-rarity="SR">
+        <span class="side-avatar purple">S</span>
+        <span class="label-text">SR 推荐</span>
+        <span class="count" id="countSR">0</span>
+      </button>
+      <button class="side-item" data-rarity="R">
+        <span class="side-avatar gray">R</span>
+        <span class="label-text">R 备选</span>
+        <span class="count" id="countR">0</span>
+      </button>
+      <button class="side-item" data-rarity="__reviewed">
+        <span class="side-avatar red">✓</span>
+        <span class="label-text">已评价</span>
+        <span class="count" id="countReviewed">0</span>
+      </button>
+    </div>
+
+    <div class="sidebar-section" id="aiSidebarSection">
+      <div class="sidebar-label">AI 复核</div>
+      <button class="side-item" id="btnAiSidebar">
+        <span class="side-avatar gray" id="aiSidebarDot">○</span>
+        <span class="label-text" id="aiSidebarText">未启用</span>
+      </button>
+    </div>
+
+    <div class="sidebar-footer" id="sidebarFooter">数据仅保存在本机</div>
+  </aside>
+
+  <!-- ======================= 主内容 ======================= -->
+  <main class="main">
+
+    <!-- ---------- 速筛 ---------- -->
+    <section class="view active" id="view-screen">
+      <div class="screen-wrap">
+        <div class="progress-strip">
+          <div class="progress-head">
+            <span>速筛进度 <b id="screenProgressText">0 / 0</b></span>
+            <span id="screenRemaining">剩余 0 份</span>
+          </div>
+          <div class="progress-track"><div class="progress-fill" id="screenProgressBar"></div></div>
+        </div>
+
+        <div class="ai-toggle-bar" id="aiToggleBar">
+          <label class="ai-switch">
+            <input type="checkbox" id="optAiReview">
+            <span id="aiToggleText">本条使用 AI 审查</span>
+          </label>
+          <span class="ai-hint" id="aiToggleHint">未配置 AI</span>
+        </div>
+
+        <div id="screenStage"></div>
+
+        <div class="screen-hint">
+          <kbd>←</kbd> 不合适　<kbd>→</kbd> 喜欢　<kbd>↓</kbd> 稍后　<kbd>Enter</kbd> 查看详情
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------- 简历库 ---------- -->
+    <section class="view" id="view-library">
+      <div class="card-panel">
+        <div class="toolbar">
+          <div class="segmented" id="rarityTabs">
+            <button class="active" data-rarity="">全部</button>
+            <button data-rarity="SSR">SSR</button>
+            <button data-rarity="SR">SR</button>
+            <button data-rarity="R">R</button>
+            <button data-rarity="__reviewed">已评价</button>
+          </div>
+
+          <span class="select-wrap">
+            <select id="filterYears">
+              <option value="">经验不限</option>
+              <option value="1">≥ 1 年</option>
+              <option value="3">≥ 3 年</option>
+              <option value="5">≥ 5 年</option>
+              <option value="8">≥ 8 年</option>
+            </select>
+          </span>
+
+          <span class="select-wrap">
+            <select id="filterDegree">
+              <option value="">学历不限</option>
+              <option value="大专">大专及以上</option>
+              <option value="本科">本科及以上</option>
+              <option value="硕士">硕士及以上</option>
+              <option value="博士">博士</option>
+            </select>
+          </span>
+
+          <span class="select-wrap">
+            <select id="sortBy">
+              <option value="score">按综合分</option>
+              <option value="years">按经验年限</option>
+              <option value="name">按姓名</option>
+              <option value="created">按导入时间</option>
+            </select>
+          </span>
+
+          <button class="icon-btn" id="btnSortOrder" title="切换升降序" style="width:32px;height:32px;border-radius:8px;">↓</button>
+
+          <span class="toolbar-spacer"></span>
+
+          <div class="segmented" id="layoutToggle">
+            <button class="active" data-layout="list">列表</button>
+            <button data-layout="grid">网格</button>
+          </div>
+        </div>
+
+        <div class="bulk-bar hidden" id="bulkBar">
+          <span id="bulkCount">已选 0 项</span>
+          <button class="btn btn-sm btn-primary" id="btnExportSelected">导出所选</button>
+          <button class="btn btn-sm btn-danger" id="btnDeleteSelected">删除所选</button>
+          <button class="btn btn-sm" id="btnClearSelect">取消选择</button>
+        </div>
+
+        <div id="libraryBody"></div>
+      </div>
+    </section>
+
+    <!-- ---------- 统计 ---------- -->
+    <section class="view" id="view-stats">
+      <div class="card-panel">
+        <div class="panel-head">
+          <div>
+            <h2>统计概览</h2>
+            <p>基于当前阈值与权重的实时统计</p>
+          </div>
+        </div>
+        <div class="stat-grid" id="statGrid"></div>
+        <div class="chart-grid">
+          <div>
+            <div class="panel-title-only"><h3>稀有度分布</h3></div>
+            <div style="padding:12px 16px 0"><div class="chart-box"><canvas id="rarityChart"></canvas></div></div>
+          </div>
+          <div>
+            <div class="panel-title-only"><h3>评分分布</h3></div>
+            <div style="padding:12px 16px 0"><div class="chart-box"><canvas id="scoreChart"></canvas></div></div>
+          </div>
+        </div>
+        <div class="panel-title-only" style="padding-top:4px"><h3>维度平均分</h3></div>
+        <div style="padding:12px 16px 0"><div class="chart-box" style="height:200px"><canvas id="dimChart"></canvas></div></div>
+        <div style="height:8px"></div>
+      </div>
+    </section>
+
+    <!-- ---------- 设置 ---------- -->
+    <section class="view" id="view-settings">
+      <div class="settings-cols">
+        <div>
+          <!-- 阈值 -->
+          <div class="card-panel">
+            <div class="panel-head">
+              <div><h3>稀有度阈值</h3><p>综合分达到阈值即归入对应档位</p></div>
+            </div>
+            <div class="panel-body">
+              <label class="field">
+                <span>SSR 阈值 <b id="ssrVal">82</b> 分</span>
+                <input type="range" id="ssrRange" min="50" max="100" step="1" value="82">
+              </label>
+              <label class="field">
+                <span>SR 阈值 <b id="srVal">66</b> 分</span>
+                <input type="range" id="srRange" min="20" max="99" step="1" value="66">
+              </label>
+              <div class="threshold-preview" id="thresholdPreview"></div>
+            </div>
+          </div>
+
+          <!-- 权重 -->
+          <div class="card-panel">
+            <div class="panel-head">
+              <div><h3>评分权重</h3><p>保存时自动归一化，不必凑满 100%</p></div>
+            </div>
+            <div class="panel-body" id="weightFields"></div>
+          </div>
+
+          <!-- 岗位 -->
+          <div class="card-panel">
+            <div class="panel-head">
+              <div><h3>目标岗位</h3><p>自动识别会按技能推断岗位画像</p></div>
+            </div>
+            <div class="panel-body">
+              <label class="field">
+                <span>岗位画像</span>
+                <select id="roleSelect"></select>
+              </label>
+              <label class="field">
+                <span>自定义关键词（逗号分隔，留空则该项不计入）</span>
+                <textarea id="keywordsInput" rows="2" placeholder="例如：Python, 微服务, 高并发"></textarea>
+              </label>
+              <label class="field">
+                <span>岗位 JD（可选，自动提取关键词）</span>
+                <textarea id="jdInput" rows="4" placeholder="粘贴 JD 原文"></textarea>
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <!-- 筛选规则 -->
+          <div class="card-panel">
+            <div class="panel-head">
+              <div><h3>筛选规则</h3><p>不满足条件会标记为淘汰或待复核</p></div>
+            </div>
+            <div class="panel-body">
+              <div class="field-row">
+                <label class="field">
+                  <span>最低综合分</span>
+                  <input type="number" id="minScore" min="0" max="100" step="1">
+                </label>
+                <label class="field">
+                  <span>最低经验（年）</span>
+                  <input type="number" id="minYears" min="0" max="40" step="0.5">
+                </label>
+                <label class="field">
+                  <span>最低学历</span>
+                  <select id="minDegree">
+                    <option value="">不限</option>
+                    <option value="大专">大专</option>
+                    <option value="本科">本科</option>
+                    <option value="硕士">硕士</option>
+                    <option value="博士">博士</option>
+                  </select>
+                </label>
+              </div>
+              <label class="field">
+                <span>必备关键词（全部命中）</span>
+                <input type="text" id="mustKeywords" placeholder="例如：Python, Docker">
+              </label>
+              <label class="field">
+                <span>淘汰关键词（命中任一即淘汰）</span>
+                <input type="text" id="rejectKeywords" placeholder="例如：外包, 劳务派遣">
+              </label>
+            </div>
+          </div>
+
+          <!-- AI 复核（用户自备接口） -->
+          <div class="card-panel">
+            <div class="panel-head">
+              <div><h3>AI 复核（可选）</h3><p>填入你自己的 OpenAI 兼容接口，用于替代或补充规则评分</p></div>
+            </div>
+            <div class="panel-body">
+              <label class="switch-row">
+                <span>启用 AI 复核</span>
+                <input type="checkbox" id="optAiEnabled">
+              </label>
+              <label class="field" style="margin-top:10px">
+                <span>接口地址（Base URL）</span>
+                <input type="text" id="aiBaseUrl" placeholder="https://api.openai.com/v1">
+              </label>
+              <label class="field">
+                <span>API Key（仅保存在本机配置文件）</span>
+                <input type="password" id="aiApiKey" placeholder="sk-..." autocomplete="off">
+              </label>
+              <div class="field-row">
+                <label class="field">
+                  <span>模型</span>
+                  <input type="text" id="aiModel" placeholder="gpt-4o-mini">
+                </label>
+                <label class="field">
+                  <span>超时（秒）</span>
+                  <input type="number" id="aiTimeout" min="10" max="300" step="5" value="60">
+                </label>
+              </div>
+              <label class="switch-row">
+                <span>AI 结果替换规则引擎（关闭则仅作参考）</span>
+                <input type="checkbox" id="optAiReplace">
+              </label>
+              <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+                <button class="btn btn-sm btn-primary" id="btnAiTest">测试连接</button>
+                <button class="btn btn-sm" id="btnAiBatch">批量复核当前入围</button>
+              </div>
+              <p class="panel-desc" style="margin-top:10px;margin-bottom:0">
+                留空或关闭时完全离线；Key 只写入本机 config.yaml，不会上传到任何第三方（除你自己填的接口）。
+              </p>
+            </div>
+          </div>
+
+          <!-- 本地 AI 审查 API -->
+          <div class="card-panel">
+            <div class="panel-head">
+              <div><h3>对外审查 API（默认关闭）</h3><p>供外部 AI / Agent 读取评分结果并回写审查意见</p></div>
+            </div>
+            <div class="panel-body">
+              <div class="api-box" id="apiBox"></div>
+              <label class="switch-row" style="margin-top:10px">
+                <span>随应用自动启动</span>
+                <input type="checkbox" id="optApiAuto">
+              </label>
+              <label class="field" style="margin-top:10px">
+                <span>监听端口</span>
+                <input type="number" id="apiPort" min="1024" max="65535" step="1" value="8765">
+              </label>
+              <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+                <button class="btn btn-sm btn-primary" id="btnApiToggle">启动 API</button>
+                <button class="btn btn-sm" id="btnApiToken">重置令牌</button>
+                <button class="btn btn-sm btn-ghost" id="btnApiDocs">查看接口文档</button>
+              </div>
+            </div>
+          </div>
+
+          <!-- 界面与隐私 -->
+          <div class="card-panel">
+            <div class="panel-head"><div><h3>界面与隐私</h3></div></div>
+            <div class="panel-body">
+              <label class="switch-row">
+                <span>开卡音效</span>
+                <input type="checkbox" id="optSound">
+              </label>
+              <label class="switch-row">
+                <span>卡片切换动画</span>
+                <input type="checkbox" id="optAnimation">
+              </label>
+              <label class="switch-row">
+                <span>保存简历原文（关闭后无法重新评分）</span>
+                <input type="checkbox" id="optRawText">
+              </label>
+              <div class="meta-list" style="margin-top:14px">
+                <div class="row"><span class="k">数据目录</span><code id="dataDir"></code></div>
+                <div class="row"><span class="k">配置文件</span><code id="configFile"></code></div>
+                <div class="row"><span class="k">日志文件</span><code id="logFile"></code></div>
+              </div>
+              <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap">
+                <button class="btn btn-sm" id="btnOpenDataDir">打开数据目录</button>
+                <button class="btn btn-sm" id="btnResetConfig">恢复默认配置</button>
+                <button class="btn btn-sm btn-danger" id="btnClearAll">清空全部简历</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-savebar">
+        <button class="btn" id="btnRescore">重新评分</button>
+        <button class="btn btn-primary" id="btnSaveConfig">保存并重新评分</button>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<!-- ======================= 进度 ======================= -->
+<div class="overlay hidden" id="progressOverlay">
+  <div class="progress-card">
+    <div class="spinner"></div>
+    <h3>正在解析与评分</h3>
+    <p id="progressFile">准备中…</p>
+    <div class="progress-track-sm"><div class="progress-fill-sm" id="progressFill"></div></div>
+    <p style="margin:10px 0 0" id="progressPercent">0%</p>
+  </div>
+</div>
+
+<!-- ======================= 详情抽屉 ======================= -->
+<div class="drawer-mask hidden" id="drawerMask"></div>
+<aside class="drawer hidden" id="drawer">
+  <div class="drawer-head">
+    <div class="drawer-head-main">
+      <span class="rarity-badge r" id="drawerRarity">R</span>
+      <h2 id="drawerName">候选人</h2>
+      <p id="drawerMeta"></p>
+    </div>
+    <button class="icon-btn" id="btnCloseDrawer">✕</button>
+  </div>
+  <div class="drawer-body" id="drawerBody"></div>
+  <div class="drawer-foot" id="drawerFoot"></div>
+</aside>
+
+<!-- ======================= 提示与拖拽 ======================= -->
+<div class="toasts" id="toasts"></div>
+<div class="drop-mask hidden" id="dropMask">
+  <div class="drop-inner">
+    <div class="icon">⇩</div>
+    <h2>松手导入简历</h2>
+    <p>支持 PDF / DOCX / TXT，可一次拖入多份</p>
+  </div>
+</div>
+
+<script src="js/charts.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

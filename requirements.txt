@@ -1,8 +1,11 @@
-fastapi==0.115.6
-uvicorn==0.34.0
-python-docx==1.1.2
-httpx==0.28.1
-pyyaml==6.0.2
-python-multipart==0.0.20
-aiosqlite==0.20.0
-jinja2==3.1.4
+# 运行依赖（开发 / 构建）
+pywebview>=5.3,<6
+python-docx>=1.1.2
+PyMuPDF>=1.24
+PyYAML>=6.0.2
+
+# 打包
+pyinstaller>=6.11,<7
+
+# 测试
+pytest>=8.0
