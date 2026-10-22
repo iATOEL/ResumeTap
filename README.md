@@ -29,7 +29,7 @@
 
 ### 方式一：直接运行 exe（推荐）
 
-从 [Releases](https://github.com/iATOEL/resume-screening-system/releases) 下载最新的 `简历TAP.exe`，双击运行：
+从 [Releases](https://github.com/iATOEL/resume-screening-system/releases/latest) 下载 `ResumeTAP.exe`（即界面里的「简历TAP」），双击运行：
 
 1. 首次启动自动创建配置与数据库
 2. 顶部先选择要招聘的岗位
