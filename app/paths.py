@@ -23,7 +23,7 @@ import sys
 from pathlib import Path
 
 APP_TITLE = "ResumeTap"
-APP_VERSION = "3.1.0"
+APP_VERSION = "3.1.1"
 
 # 旧版本使用的 %APPDATA% 目录名，用于一次性迁移
 LEGACY_DATA_DIR_NAME = "ResumeGacha"

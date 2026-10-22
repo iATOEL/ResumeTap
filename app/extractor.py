@@ -521,6 +521,12 @@ def extract(text: str, filename: str = "") -> Extracted:
 
     result.experience_text = sections.get("experience", "")
     result.education_text = sections.get("education", "")
+    # 先取全部章节文本：下面的学历推断要把工作/项目章节排除掉，
+    # 否则项目里出现的校名会被当成教育经历
+    result.project_text = sections.get("projects", "")
+    result.skill_text = sections.get("skills", "")
+    result.summary_text = sections.get("summary", "")
+    result.awards_text = sections.get("awards", "")
 
     years, source = extract_years(text, result.experience_text, result.education_text)
     result.years = years
@@ -545,11 +551,6 @@ def extract(text: str, filename: str = "") -> Extracted:
     result.school_bonus = bonus
     result.major = _detect_major(edu_scope)
     result.education_entries = _parse_education_entries(edu_scope)
-
-    result.project_text = sections.get("projects", "")
-    result.skill_text = sections.get("skills", "")
-    result.summary_text = sections.get("summary", "")
-    result.awards_text = sections.get("awards", "")
 
     result.role_title = _detect_role_title(text)
     result.projects = _split_projects(result.project_text)

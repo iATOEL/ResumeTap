@@ -28,8 +28,9 @@ API = "https://api.github.com"
 
 EXCLUDE_DIRS = {
     ".git", "build", "dist", "release", ".devdata", "__pycache__",
-    ".venv", ".pytest_cache", "tools/_probe", "tools/_bad", "tests/_legacy",
+    ".venv", ".pytest_cache", "_probe", "_bad", "_legacy",
 }
+EXCLUDE_PATHS = {"tools/_probe", "tools/_bad", "tests/_legacy", "tools/_remote"}
 EXCLUDE_SUFFIX = {".pyc", ".pyo", ".exe", ".zip", ".spec"}
 EXCLUDE_NAMES = {
     "config.yaml", "data.db", "data.db-shm", "data.db-wal",
@@ -76,9 +77,10 @@ def collect_files() -> dict[str, Path]:
             continue
         rel = path.relative_to(ROOT)
         rel_posix = rel.as_posix()
-        if any(rel_posix.startswith(ex) for ex in EXCLUDE_DIRS):
+        # 只按路径分段匹配目录名，避免 "build.py" 被 "build" 前缀误伤
+        if set(rel.parts[:-1]) & EXCLUDE_DIRS or rel.parts[0] in EXCLUDE_DIRS:
             continue
-        if set(rel.parts) & EXCLUDE_DIRS:
+        if any(rel_posix == ex or rel_posix.startswith(ex + "/") for ex in EXCLUDE_PATHS):
             continue
         if path.suffix.lower() in EXCLUDE_SUFFIX:
             continue
@@ -100,6 +102,16 @@ def audit_stray_files() -> list[str]:
     return stray
 
 
+REQUIRED_FILES = {"build.py", "run_app.py", "requirements.txt", ".gitignore", "README.md"}
+
+
+def verify_required(files: dict[str, Path]) -> None:
+    """关键文件缺失时中止，否则仓库会悄悄少文件（build.py 曾被误排除）。"""
+    missing = sorted(REQUIRED_FILES - set(files))
+    if missing:
+        raise SystemExit(f"✗ 待推送文件中缺少关键文件：{', '.join(missing)}")
+
+
 def push_code(message: str) -> str:
     stray = audit_stray_files()
     if stray:
@@ -115,6 +127,7 @@ def push_code(message: str) -> str:
     print(f"  父提交 {parent_sha[:8]}")
 
     files = collect_files()
+    verify_required(files)
     print(f"  本地文件 {len(files)} 个，上传 blob…")
     entries = []
     for index, (rel, local) in enumerate(sorted(files.items()), start=1):

@@ -1,0 +1,39 @@
+# 构建产物（便携版通过 GitHub Release 的 zip 分发）
+build/
+dist/
+release/
+*.exe
+*.zip
+*.spec
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+*.egg-info/
+tests/_legacy/
+
+# 本地配置与数据（含 API Key，绝不提交）
+config.yaml
+data/
+.devdata/
+data.db
+data.db-shm
+data.db-wal
+uploads/
+staging/
+exports/
+
+# 工具临时输出
+tools/_probe/
+tools/_bad/
+tools/_harness/
+tools/_remote/
+tools/_v3b.py
+
+# 系统
+.DS_Store
+Thumbs.db
+desktop.ini

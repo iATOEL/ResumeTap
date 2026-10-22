@@ -195,13 +195,16 @@ def statistics() -> dict:
     scores, years = [], []
     evaluated = 0
     for item in candidates:
+        review_counts[item.get("review_verdict", "")] = review_counts.get(item.get("review_verdict", ""), 0) + 1
+        # 稀有度与筛选结论都由 AI 产出：未评估的记录只是占位值（R / pass），
+        # 计入会让 pass_rate、ssr_rate 超过 100%
+        if item.get("eval_status") != "done":
+            continue
         counts[item["rarity"]] = counts.get(item["rarity"], 0) + 1
         status_counts[item["status"]] = status_counts.get(item["status"], 0) + 1
-        review_counts[item.get("review_verdict", "")] = review_counts.get(item.get("review_verdict", ""), 0) + 1
-        if item.get("eval_status") == "done":
-            evaluated += 1
-            scores.append(item["overall_score"])
-            years.append(item.get("years") or 0)
+        evaluated += 1
+        scores.append(item["overall_score"])
+        years.append(item.get("years") or 0)
 
     passed = status_counts["pass"]
     best = max((c for c in candidates if c.get("eval_status") == "done"),
@@ -294,6 +297,14 @@ def _eval_label(item: dict) -> str:
             "done": "已评估", "error": "评估失败"}.get(status, status)
 
 
+def _status_label(item: dict) -> str:
+    """筛选结论由 AI 给出；未评估时不能冒充"通过"。"""
+    if item.get("eval_status") != "done":
+        return "待评估"
+    return {"pass": "通过", "flagged": "待复核", "rejected": "淘汰"}.get(
+        item.get("status", ""), item.get("status", ""))
+
+
 def _dimension_text(item: dict) -> str:
     dims = {d.get("key"): d for d in item.get("dimensions", [])}
 
@@ -306,7 +317,7 @@ def _dimension_text(item: dict) -> str:
     return " / ".join(
         f"{label}{fmt(key)}" for key, label in
         [("skill", "技能"), ("experience", "经验"), ("education", "学历"),
-         ("project", "项目"), ("keyword", "关键词"), ("job_match", "岗位")]
+         ("project", "项目"), ("job_match", "岗位")]
     )
 
 
@@ -335,6 +346,10 @@ def _hits_text(item: dict) -> str:
     return "、".join(hits)
 
 
+def _payload(item: dict) -> dict:
+    return item.get("payload") or {}
+
+
 def _csv_safe(value) -> str:
     """避免 Excel 把文本当公式执行（CSV 注入防护）。"""
     text = "" if value is None else str(value)
@@ -356,17 +371,17 @@ def _write_csv(path: Path, items: list[dict]) -> None:
             writer.writerow([
                 index,
                 _csv_safe(item["name"]),
-                _csv_safe((item.get("payload", {}).get("contact") or {}).get("phone", "")),
-                _csv_safe((item.get("payload", {}).get("contact") or {}).get("email", "")),
+                _csv_safe(_payload(item).get("contact", {}).get("phone", "")),
+                _csv_safe(_payload(item).get("contact", {}).get("email", "")),
                 item["rarity"],
                 item["overall_score"],
-                {"pass": "通过", "flagged": "待复核", "rejected": "淘汰"}.get(item["status"], item["status"]),
+                _status_label(item),
                 {"liked": "喜欢", "passed": "不合适", "skipped": "稍后"}.get(item.get("review_verdict", ""), "未评价"),
                 _eval_label(item), item.get("years", 0),
                 _csv_safe(item.get("degree", "")), _csv_safe(item.get("school", "")),
                 _csv_safe(item.get("school_tier_label", "")),
                 _csv_safe(_education_text(item)), _csv_safe(item["filename"]),
-                _dimension_text(item), _csv_safe(item.get("ai_model", "")),
+                _dimension_text(item), _csv_safe(_payload(item).get("ai_model", "")),
                 _csv_safe("；".join(item.get("strengths", []))),
                 _csv_safe("；".join(item.get("weaknesses", []))),
                 _csv_safe(item.get("eval_error", "")),
@@ -391,18 +406,21 @@ def _write_json(path: Path, items: list[dict], config: dict) -> None:
                 "degree": item.get("degree"), "school": item.get("school"),
                 "school_tier": item.get("school_tier"),
                 "school_tier_label": item.get("school_tier_label"),
-                "contact": (item.get("payload", {}).get("contact") or {}),
+                "contact": _payload(item).get("contact") or {},
                 "education_entries": _education_entries(item),
-                "score_source": item.get("score_source", "rules"),
+                "score_source": _payload(item).get("score_source", ""),
+                "ai_model": _payload(item).get("ai_model", ""),
                 "summary": item.get("summary"),
-                "news_flash": item.get("news_flash", ""),
-                "strengths": item.get("strengths", []),
-                "weaknesses": item.get("weaknesses", []),
+                "news_flash": _payload(item).get("news_flash", ""),
+                "strengths": _payload(item).get("strengths", []),
+                "weaknesses": _payload(item).get("weaknesses", []),
                 "review_verdict": item.get("review_verdict", ""),
                 "review_note": item.get("review_note", ""),
-                "dimensions": item.get("dimensions", []),
-                "skill_hits": item.get("skill_hits", []),
-                "screen_reasons": item.get("screen_reasons", []),
+                "dimensions": _payload(item).get("dimensions", []),
+                "skill_hits": _payload(item).get("skill_hits", []),
+                "screen_reasons": _payload(item).get("screen_reasons", []),
+                "eval_status": item.get("eval_status", "pending"),
+                "eval_error": item.get("eval_error", ""),
                 "created_at": item.get("created_at"),
             }
             for item in items
@@ -423,18 +441,26 @@ def _write_markdown(path: Path, items: list[dict], config: dict) -> None:
         "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for index, item in enumerate(items, start=1):
-        status = {"pass": "通过", "flagged": "待复核", "rejected": "淘汰"}.get(item["status"], item["status"])
+        status = _status_label(item)
         verdict = {"liked": "喜欢", "passed": "不合适", "skipped": "稍后"}.get(item.get("review_verdict", ""), "未评价")
         school = item.get("school", "")
         if school and item.get("school_tier_label"):
             school = f"{school}（{item['school_tier_label']}）"
+        score_text = f"{item['overall_score']:.1f}" if item.get("eval_status") == "done" else "—"
         lines.append(
-            f"| {index} | {item['name']} | {item['rarity']} | {item['overall_score']:.1f} | "
+            f"| {index} | {item['name']} | {item['rarity']} | {score_text} | "
             f"{item.get('years', 0):.1f} 年 | {item.get('degree', '')} | {school} | {verdict} | {status} |"
         )
 
     lines += ["", "## 评分明细", ""]
     for item in items:
+        if item.get("eval_status") != "done":
+            lines.append(f"### {item['name']}（{_eval_label(item)}）")
+            lines.append("")
+            if item.get("eval_error"):
+                lines.append(f"- 失败原因：{item['eval_error']}")
+            lines.append("")
+            continue
         lines.append(f"### {item['name']}（{item['rarity']} / {item['overall_score']:.1f}）")
         lines.append("")
         if item.get("summary"):
@@ -445,7 +471,7 @@ def _write_markdown(path: Path, items: list[dict], config: dict) -> None:
             lines.append("- 不足：" + "；".join(item["weaknesses"]))
         for dim in item.get("dimensions", []):
             lines.append(
-                f"- {dim.get('label')}：{dim.get('score', 0):.1f} 分（权重 {dim.get('weight', 0):.0%}）"
+                f"- {dim.get('label')}：{dim.get('score', 0):.1f} 分"
                 f" — {dim.get('detail', '')}"
             )
         if item.get("screen_reasons"):

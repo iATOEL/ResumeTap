@@ -78,7 +78,7 @@
     return state.config ? state.config.ui.sound : true;
   }
   function beep(freqs, duration, gainValue) {
-    if (!soundOn() || !state.config.ui.animation) return;
+    if (!soundOn()) return;
     try {
       if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       const now = audioCtx.currentTime;
@@ -305,6 +305,8 @@
         return;
       }
       if (typing) return;
+      // 弹窗打开时不要响应速筛快捷键，否则确认框背后的简历会被误评
+      if (document.querySelector('.modal-layer')) return;
 
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'o') {
         e.preventDefault();
@@ -644,9 +646,70 @@
     if (!state.aiStatus) refreshAiStatus();
   }
 
+  /** 速筛队列为空时的三种情况：没导入 / 还没评估 / 全部看完了 */
+  function doneEmptyHtml(total) {
+    if (!total) {
+      return `
+        <div class="empty-block">
+          <div class="empty-icon">◉</div>
+          <h3>简历库是空的</h3>
+          <p>导入 PDF / DOCX / TXT 简历后，AI 会逐份评估，这里会按分数从高到低请你逐份过一遍。</p>
+          <div class="empty-actions">
+            <button class="btn btn-primary" id="doneImport">导入简历</button>
+            <button class="btn" id="doneSamples">载入示例</button>
+          </div>
+        </div>`;
+    }
+
+    const evaluated = (state.eval && state.eval.done) || 0;
+    if (!evaluated) {
+      const errored = (state.eval && state.eval.error) || 0;
+      const waiting = (state.eval && state.eval.pending) || 0;
+      return `
+        <div class="empty-block">
+          <div class="empty-icon">◎</div>
+          <h3>${errored && !waiting ? '所有简历都评估失败' : '还没有已评估的简历'}</h3>
+          <p>${
+            errored && !waiting
+              ? `共 ${errored} 份评估失败。点速筛页上方的「重试失败」重新排队，或到设置页检查 AI 配置。`
+              : waiting
+                ? `有 ${waiting} 份简历等待 AI 评估。点上方「开始评估」执行；未配置 AI 时请先到设置页填写 API Key。`
+                : '导入简历后点上方「开始评估」，AI 评估完成后简历会出现在这里。'
+          }</p>
+          <div class="empty-actions">
+            <button class="btn btn-primary" id="doneStartQueue">开始评估</button>
+            <button class="btn" id="doneSettings">AI 设置</button>
+          </div>
+        </div>`;
+    }
+
+    return `
+      <div class="empty-block">
+        <div class="empty-icon">✓</div>
+        <h3>这一轮看完了</h3>
+        <p>共 ${total} 份简历，已全部给出结论。可以导出结果，或重新开始一轮速筛。</p>
+        <div class="empty-actions">
+          <button class="btn btn-primary" id="doneExport">导出结果</button>
+          <button class="btn" id="doneReset">重新开始速筛</button>
+        </div>
+      </div>`;
+  }
+
+  function bindDoneActions() {
+    const bind = (id, handler) => {
+      const node = $(id);
+      if (node) node.addEventListener('click', handler);
+    };
+    bind('doneImport', importViaDialog);
+    bind('doneSamples', loadSamples);
+    bind('doneStartQueue', startQueue);
+    bind('doneSettings', () => switchView('settings'));
+    bind('doneExport', exportAll);
+    bind('doneReset', resetReviews);
+  }
+
   function needJobHtml() {
-    const groups = state.roleGroups || [];
-    const labelOf = {};
+    const groups = state.roleGroups || [];    const labelOf = {};
     (state.roles || []).forEach((r) => { labelOf[r.key] = r.label; });
 
     const groupsHtml = groups.map((group) => {
@@ -787,7 +850,6 @@
     const dims = item.dimensions || [];
     const strengths = item.strengths || [];
     const weaknesses = item.weaknesses || [];
-    const skills = (item.skill_hits || []).slice(0, 7);
     const flash = item.news_flash || item.summary || '暂无评语';
     const roleLabel = item.detected_role_label || item.role || '未识别岗位';
 
@@ -888,10 +950,6 @@
           <div style="margin-bottom:16px">
             <div style="font-size:12px;font-weight:700;color:var(--text-3);letter-spacing:.4px;margin-bottom:8px">教育经历</div>
             ${eduHtml}
-          </div>
-
-          <div class="skills-row">
-            ${skills.map((hit) => `<span class="chip">${escapeHtml(hit.term || hit.name)}</span>`).join('')}
           </div>
 
           <div class="screen-actions">
@@ -1160,7 +1218,7 @@
     const haystack = [
       item.name, item.filename, item.school, item.degree, item.summary,
       item.detected_role_label, item.major,
-      (item.skill_hits || []).map((h) => h.term || h.name).join(' '),
+      (((item.payload || {}).sections || {}).skills || '').slice(0, 800),
     ].join(' ').toLowerCase();
     return haystack.includes(state.search);
   }
@@ -1251,8 +1309,16 @@
     const verdictChip = reviewed === 'liked' ? '<span class="status-badge pass">喜欢</span>'
       : reviewed === 'passed' ? '<span class="status-badge rejected">不合适</span>'
       : reviewed === 'skipped' ? '<span class="status-badge flagged">稍后</span>' : '';
-    const tags = (item.skill_hits || []).slice(0, 4)
-      .map((h) => `<span class="chip">${escapeHtml(h.term || h.name)}</span>`).join('');
+    // 技能标签取本地抽取的技能章节（AI 只给判断，不负责抄字段）
+    const skillText = ((item.payload || {}).sections || {}).skills || '';
+    const skillTags = skillText
+      .split(/[、,，\n\/|]+/)
+      .map((t) => t.trim())
+      .filter((t) => t && t.length <= 16)
+      .slice(0, 4);
+    const tags = skillTags.length
+      ? `<div class="person-tags">${skillTags.map((t) => `<span class="chip">${escapeHtml(t)}</span>`).join('')}</div>`
+      : '';
     const selected = state.selected.has(item.id);
     const evaluated = item.eval_status === 'done';
     const failed = item.eval_status === 'error';
@@ -1276,7 +1342,7 @@
             ${item.school ? ` · ${escapeHtml(item.school)}` : ''}
           </div>
           <div class="person-flash">${escapeHtml(item.news_flash || item.summary || '')}</div>
-          <div class="person-tags">${tags}</div>
+          ${tags}
         </div>
         <div class="person-right">
           <span class="person-score ${rarity} ${evaluated ? '' : 'pending-score'}">${
@@ -1384,32 +1450,6 @@
       </div>`).join('')}</div>`;
   }
 
-  function aiReviewHtml(payload) {
-    const ai = payload.ai_review;
-    if (!ai) {
-      return '';
-    }
-    const applied = ai.applied !== false;
-    return `
-      <div class="section-block">
-        <h4>AI 复核${applied ? '（已替换评分）' : '（仅供参考）'} · ${escapeHtml(ai.model || '')}</h4>
-        <div class="api-box" style="border-color:#bcd7ff;background:#f2f7ff">
-          ${ai.summary ? `<div style="margin-bottom:8px"><b>结论：</b>${escapeHtml(ai.summary)}</div>` : ''}
-          ${(ai.rules_score != null && applied) ? `
-          <div style="display:flex;gap:14px;margin-bottom:8px;font-size:12.5px">
-            <span>规则引擎：<b>${fmtScore(ai.rules_score)}</b> ${escapeHtml(ai.rules_rarity || '')}</span>
-            <span style="color:var(--primary)">AI 复核：<b>${fmtScore(ai.overall_score)}</b></span>
-            <span style="color:${ai.overall_score >= ai.rules_score ? 'var(--success)' : 'var(--danger)'}">
-              ${ai.overall_score >= ai.rules_score ? '▲' : '▼'} ${Math.abs(ai.overall_score - ai.rules_score).toFixed(1)}
-            </span>
-          </div>` : ''}
-          <div style="display:flex;flex-wrap:wrap;gap:6px">
-            ${(ai.dimensions || []).map((d) => `<span class="chip">${escapeHtml(d.label)} ${fmtScore(d.score)}</span>`).join('')}
-          </div>
-        </div>
-      </div>`;
-  }
-
   function drawerHtml(data, payload) {
     const dims = payload.dimensions || [];
     const reasons = payload.screen_reasons || [];
@@ -1429,10 +1469,8 @@
         </div>`;
     }).join('');
 
-    const skillChips = (payload.skill_hits || []).map((hit) => `
-      <span class="chip" title="${escapeHtml((hit.contexts || []).join(' / '))}">
-        ${escapeHtml(hit.term)} · ${hit.count}
-      </span>`).join('');
+    // 技能由本地抽取的技能章节展示；不再有规则引擎的 skill_hits 命中统计
+    const skillText = ((payload.sections || {}).skills || '').trim();
 
     const reasonBox = reasons.length
       ? `<div class="api-box" style="border-color:${payload.status === 'rejected' ? '#f5c2c0' : '#ffe08a'};background:${payload.status === 'rejected' ? 'var(--danger-soft)' : 'var(--warning-soft)'}">
@@ -1484,8 +1522,6 @@
         ${drawerEducationHtml(payload)}
       </div>
 
-      ${aiReviewHtml(payload)}
-
       <div class="section-block">
         <h4>优点</h4>
         <div class="pros-col" style="background:var(--success-soft)">
@@ -1505,10 +1541,10 @@
         ${dimRows || '<div class="dim-note">无评分数据</div>'}
       </div>
 
-      <div class="section-block">
-        <h4>命中技能（${(payload.skill_hits || []).length}）</h4>
-        <div style="display:flex;flex-wrap:wrap;gap:6px">${skillChips || '<span class="dim-note">未命中技能词典</span>'}</div>
-      </div>
+      ${skillText ? `<div class="section-block">
+        <h4>技能</h4>
+        <div class="raw-text" style="max-height:none">${escapeHtml(skillText.slice(0, 1200))}</div>
+      </div>` : ''}
 
       ${projects ? `<div class="section-block"><h4>项目经历</h4>${projects}</div>` : ''}
 
@@ -1560,7 +1596,7 @@
       layer.innerHTML = `
         <div class="modal-card">
           <h3>导出筛选结果</h3>
-          <p>包含综合分、稀有度、六维明细、优缺点、命中技能与人工评价。</p>
+          <p>包含综合分、稀有度、五维明细、优缺点、联系方式与人工评价。</p>
           <div class="modal-options">
             <button class="modal-option" data-fmt="csv"><b>CSV 表格</b><span>Excel 直接打开</span></button>
             <button class="modal-option" data-fmt="json"><b>JSON 数据</b><span>完整字段，便于程序处理</span></button>
@@ -1855,12 +1891,12 @@
       buildQueue();
       syncSettingsForm();
       renderAll();
-      toast('已保存并重新评分', 'success');
+      toast('设置已保存。改动岗位或规则后，需点「全部重新排队」再开始评估', 'success');
     } catch (err) {
       toast(err.message, 'error');
     } finally {
       btn.disabled = false;
-      btn.textContent = '保存并重新评分';
+      btn.textContent = '保存设置';
     }
   }
 
@@ -1881,19 +1917,24 @@
   }
 
   async function rescoreAll() {
+    const ok = await confirmDialog(
+      '全部重新排队',
+      '将把所有简历标记为待评估。之后到速筛页点「开始评估」，AI 会按当前岗位重新评估。'
+    );
+    if (!ok) return;
     try {
-      const result = await call('rescore_all');
+      const result = await call('queue_requeue_all');
       applyPayload(result);
       buildQueue();
       renderAll();
-      toast(`已重新评分 ${result.updated || 0} 份`, 'success');
+      toast(`已排队 ${result.queued || 0} 份，点「开始评估」执行`, 'success');
     } catch (err) {
       toast(err.message, 'error');
     }
   }
 
   async function resetSettings() {
-    const ok = await confirmDialog('恢复默认配置', '当前阈值、权重与筛选规则将被重置，并按默认规则重新评分。');
+    const ok = await confirmDialog('恢复默认配置', '当前阈值、岗位与筛选规则将被重置为默认值。已有评分不会自动清除，需要重评请点「全部重新排队」。');
     if (!ok) return;
     try {
       const result = await call('reset_config');
@@ -1902,7 +1943,7 @@
       buildQueue();
       syncSettingsForm();
       renderAll();
-      toast('已恢复默认并重新评分', 'success');
+      toast('已恢复默认配置（已有评分保留，重评请点「全部重新排队」）', 'success');
     } catch (err) {
       toast(err.message, 'error');
     }

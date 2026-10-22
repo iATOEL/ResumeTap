@@ -628,3 +628,70 @@ def test_eval_status_not_lost_after_queue(tmp_path, mock_ai):
     assert len(items) == 4
     assert all(i["eval_status"] == "done" for i in items)
     assert all(i["overall_score"] > 0 for i in items)
+
+
+# ---------------------------------------------------------------- 回归测试
+
+def test_project_school_not_treated_as_education():
+    """项目章节里出现的校名不能算作学历（v3.1.1 修复）。"""
+    text = "李四\n项目经历\n华中科技大学 本科 联合培养项目\n负责平台开发\n"
+    ext = extractor.extract(text, "a.docx")
+    assert ext.school == ""
+    assert ext.degree == "其他"
+    assert ext.education_source == "missing"
+
+
+def test_statistics_rates_ignore_unevaluated():
+    """未评估的简历只是占位值，不能让 pass_rate / ssr_rate 超过 100%。"""
+    storage.insert_candidate(name="甲", filename="a.docx", stored_path="", file_hash="h1",
+                             raw_text="x", payload={"overall_score": 0}, eval_status="pending")
+    done_id = storage.insert_candidate(
+        name="乙", filename="b.docx", stored_path="", file_hash="h2",
+        raw_text="x", payload={"overall_score": 90}, eval_status="done")
+    storage.update_candidate(
+        done_id,
+        {"overall_score": 90, "rarity": "SSR", "status": "pass", "summary": "s", "name": "乙"})
+
+    stats = services.statistics()
+    assert stats["evaluated"] == 1
+    assert stats["pass_rate"] <= 100
+    assert stats["ssr_rate"] <= 100
+    assert stats["rarity_counts"]["R"] == 0
+
+
+def test_export_status_marks_pending(tmp_path, cfg):
+    """未评估的简历导出时不能显示为"通过"。"""
+    services.import_files([str(_sample_file(tmp_path))], cfg)
+    result = services.export_candidates("csv", None, cfg, target_dir=str(tmp_path / "out"))
+    content = Path(result["path"]).read_text(encoding="utf-8-sig")
+    row = content.split("\n")[1]
+    assert "待评估" in row
+    assert "通过" not in row
+
+
+def test_export_ai_model_column(tmp_path, mock_ai):
+    """CSV 的 AI 模型列应取自已保存的 payload。"""
+    base_url, _ = mock_ai
+    cfg = _ai_config(base_url)
+    services.import_files([str(_sample_file(tmp_path))], cfg)
+
+    from app.bridge import Bridge
+
+    Bridge().ai_evaluate_one(storage.list_candidates()[0]["id"])
+    result = services.export_candidates("csv", None, cfg, target_dir=str(tmp_path / "out"))
+    content = Path(result["path"]).read_text(encoding="utf-8-sig")
+    assert "mock-model" in content
+
+
+def test_markdown_omits_zero_weight(tmp_path, mock_ai):
+    """规则引擎已删除，报告里不应再出现恒为 0% 的权重。"""
+    base_url, _ = mock_ai
+    cfg = _ai_config(base_url)
+    services.import_files([str(_sample_file(tmp_path))], cfg)
+
+    from app.bridge import Bridge
+
+    Bridge().ai_evaluate_one(storage.list_candidates()[0]["id"])
+    result = services.export_candidates("md", None, cfg, target_dir=str(tmp_path / "out"))
+    content = Path(result["path"]).read_text(encoding="utf-8")
+    assert "权重" not in content
