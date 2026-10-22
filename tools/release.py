@@ -35,6 +35,9 @@ EXCLUDE_NAMES = {
     "config.yaml", "data.db", "data.db-shm", "data.db-wal",
     "Thumbs.db", ".DS_Store",
 }
+# 只允许 samples/ 与 docs/ 下出现二进制文档，根目录的散落简历一律视为测试残留
+ALLOWED_DOC_DIRS = ("samples/", "docs/")
+DOC_SUFFIX = {".docx", ".pdf", ".doc", ".md", ".txt"}
 
 TOKEN = os.environ.get("GITHUB_TOKEN", "").strip()
 
@@ -81,11 +84,30 @@ def collect_files() -> dict[str, Path]:
             continue
         if rel.name in EXCLUDE_NAMES:
             continue
+        if rel.suffix.lower() in {".docx", ".pdf", ".doc"}:
+            if not rel_posix.startswith(ALLOWED_DOC_DIRS):
+                continue
         files[rel_posix] = path
     return files
 
 
+def audit_stray_files() -> list[str]:
+    """找出根目录下不该提交的散落文档（多为测试残留）。"""
+    stray = []
+    for path in ROOT.iterdir():
+        if path.is_file() and path.suffix.lower() in {".docx", ".pdf", ".doc"}:
+            stray.append(path.name)
+    return stray
+
+
 def push_code(message: str) -> str:
+    stray = audit_stray_files()
+    if stray:
+        print(f"\n⚠ 根目录发现 {len(stray)} 个文档文件，已自动排除（疑似测试残留）：")
+        for name in stray[:10]:
+            print(f"    {name}")
+        print("  建议手动删除，避免污染工作目录。")
+
     print(f"\n[源码] 推送 {OWNER}/{REPO} @ {BRANCH}")
     ref = api("GET", f"/repos/{OWNER}/{REPO}/git/ref/heads/{BRANCH}")
     parent_sha = ref["object"]["sha"]
