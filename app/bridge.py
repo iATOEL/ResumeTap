@@ -79,6 +79,8 @@ class Bridge:
                 meta={
                     "version": paths.APP_VERSION,
                     "data_dir": str(paths.data_dir()),
+                    "app_dir": str(paths.app_dir()),
+                    "portable": paths.is_portable(),
                     "config_path": str(paths.config_path()),
                     "log_path": str(paths.logs_dir() / "app.log"),
                     "api": api.status(),
@@ -442,7 +444,7 @@ class Bridge:
     def load_samples(self) -> dict:
         """载入随包分发的示例简历。"""
         try:
-            sample_dir = paths.resource_dir() / "samples"
+            sample_dir = paths.samples_dir()
             if not sample_dir.is_dir():
                 return self._err("未找到示例简历目录")
             files = sorted(

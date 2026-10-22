@@ -27,17 +27,31 @@
 
 ## 快速开始
 
-### 方式一：直接运行 exe（推荐）
+### 方式一：下载便携版（推荐）
 
-从 [Releases](https://github.com/iATOEL/ResumeTap/releases/latest) 下载 `ResumeTap.exe`（即界面里的「ResumeTap」），双击运行：
+从 [Releases](https://github.com/iATOEL/ResumeTap/releases/latest) 下载
+`ResumeTap-v3.1.0-win64.zip`，解压到任意位置（桌面、U 盘都行），双击 `ResumeTap.exe`。
 
-1. 首次启动自动创建配置与数据库
-2. 顶部先选择要招聘的岗位
-3. 点「导入简历」或把 PDF / DOCX / TXT 拖进窗口
-4. 自动进入速筛，按提示逐份看简历
+解压后的目录结构：
 
-> 无需安装 Python，也无需任何运行环境。Windows 10/11 自带所需组件。
-> exe 不放进仓库（二进制文件会让仓库体积随每次构建翻倍），请从 Releases 获取。
+```
+ResumeTap/
+├── ResumeTap.exe          启动器
+├── _internal/             运行依赖（请勿删除）
+├── ui/                    界面文件，可自行调整样式
+├── assets/                图标等资源
+├── samples/               示例简历
+├── data/                  你的数据（配置 / 数据库 / 简历 / 导出 / 日志）
+├── config.example.yaml    配置参考
+├── README.txt             使用说明
+└── LICENSE
+```
+
+**绿色版特性**：所有数据都写在 `data/` 内，整个文件夹可以随意拷贝到另一台电脑继续用；
+卸载只需删掉文件夹，不在系统里留任何东西。
+
+> 不需要安装 Python 或任何运行环境。Windows 10/11 自带所需组件。
+> 源码与构建脚本在仓库里，发布包只通过 Releases 分发（zip 不进版本库）。
 
 ### 方式二：从源码运行
 
@@ -389,29 +403,75 @@ curl -X POST -H "X-API-Token: $TOKEN" \
 
 ---
 
-## 从源码构建 exe
+## 从源码构建便携版
 
 ```bash
-.venv/Scripts/python.exe build.py            # 单文件 exe（默认）
-.venv/Scripts/python.exe build.py --onedir   # 目录版（启动更快）
+# 一键构建：PyInstaller 目录版 → 组装便携目录 → 压缩 zip
+.venv/Scripts/python.exe build.py
 ```
 
-产物：项目根目录的 `ResumeTap.exe`（约 43 MB，已被 `.gitignore` 排除，不会误提交）
+产物：
 
-构建脚本会自动：生成图标 → 检查/生成示例简历 → 清理 → PyInstaller 打包。
+```
+release/
+├── ResumeTap/                      ← 便携版根目录，可直接运行
+│   ├── ResumeTap.exe
+│   ├── _internal/                  运行依赖
+│   ├── ui/  assets/  samples/      可直接查看修改的资源
+│   ├── data/                       空的 data 目录（首次启动自动填充）
+│   ├── config.example.yaml
+│   ├── README.txt
+│   └── LICENSE
+└── ResumeTap-v3.1.0-win64.zip      ← 上传 GitHub Release 用这个
+```
 
-手动构建：
+构建脚本自动完成：
+
+1. 检查/生成图标与示例简历
+2. 清理旧产物
+3. PyInstaller `--onedir` 打包到 `release/ResumeTap/`
+4. 把 `ui/`、`assets/`、`samples/` 复制到便携目录（用户可见、可改）
+5. 创建空的 `data/` 结构，写入 `README.txt`、`config.example.yaml`、`LICENSE`
+6. **清掉本地测试产生的 `config.yaml` / `data.db`**，保证发布包是干净的首次启动状态
+7. 压缩为 zip（解压后得到 `ResumeTap/` 顶层目录）
+
+### 为什么不打包成单个 exe
+
+单文件 exe 每次启动都要把 40 MB 解压到临时目录，冷启动 3-4 秒；
+而且它不适合做便携版——真正需要"带走全部数据"时，目录结构才直观可控。
+如果确实需要单文件：
 
 ```bash
-.venv/Scripts/python.exe -m PyInstaller --noconfirm --clean --onefile \
-  --name "ResumeTap" --windowed \
-  --add-data "ui;ui" --add-data "assets;assets" --add-data "samples;samples" \
-  --hidden-import webview.platforms.edgechromium \
-  --icon assets/icon.ico \
-  run_app.py
+.venv/Scripts/python.exe build.py --onefile
 ```
 
-单文件首次启动需解压（约 2–4 秒），目录版约 1 秒。
+### 其他选项
+
+```bash
+.venv/Scripts/python.exe build.py --no-zip    # 只生成目录，不压缩
+.venv/Scripts/python.exe build.py --keep      # 保留旧的 build/release
+```
+
+### 发布到 GitHub
+
+```bash
+export GITHUB_TOKEN=你的token
+.venv/Scripts/python.exe tools/release.py
+```
+
+脚本会：推送源码（排除构建产物与本地数据）→ 创建/更新对应版本的 Release →
+上传 `ResumeTap-v<版本>-win64.zip`。
+
+只做其中一步：
+
+```bash
+.venv/Scripts/python.exe tools/release.py --skip-code    # 只上传 zip
+.venv/Scripts/python.exe tools/release.py --skip-asset   # 只推源码
+```
+
+### 调整版本号
+
+版本号只在 `app/paths.py` 的 `APP_VERSION` 一处维护，构建脚本与发布脚本都会读取它。
 
 ---
 
@@ -419,45 +479,62 @@ curl -X POST -H "X-API-Token: $TOKEN" \
 
 ```
 resume-gacha/
-├── run_app.py                  # 打包入口
-├── build.py                    # 一键构建
+├── run_app.py                  # PyInstaller 入口
+├── build.py                    # 一键构建便携版 + zip
 ├── requirements.txt
-├── config.example.yaml         # 配置示例（Java 后端岗位）
+├── config.example.yaml         # 配置模板
 ├── app/
 │   ├── __main__.py             # 窗口启动、WebView2 检测、API 拉起
 │   ├── bridge.py               # JS ↔ Python 桥
-│   ├── ai_review.py            # AI 复核（用户自备接口）
+│   ├── ai_engine.py            # AI 评估（提示词、调用、结果解析）
+│   ├── eval_queue.py           # 评估队列（开始/暂停/重试）
 │   ├── api.py                  # 对外审查 HTTP API（默认关闭）
 │   ├── config.py               # 配置加载/校验/版本迁移
 │   ├── parser.py               # PDF / DOCX / TXT 解析
-│   ├── extractor.py            # 结构化抽取
-│   ├── schools.py              # 院校分层库
-│   ├── scoring.py              # 六维评分 + 优缺点生成
-│   ├── rules.py                # 技能词典、岗位画像
-│   ├── storage.py              # SQLite（含人工评价）
-│   ├── services.py             # 导入/重评分/导出/统计
-│   └── paths.py
+│   ├── extractor.py            # 客观信息抽取（姓名/联系方式/教育/年限）
+│   ├── schools.py              # 院校层级库
+│   ├── rules.py                # 岗位画像与岗位分组
+│   ├── storage.py              # SQLite（含评估状态、人工评价）
+│   ├── services.py             # 导入/重新排队/导出/统计
+│   └── paths.py                # 便携数据目录定位
 ├── ui/                         # 原生 HTML/CSS/JS，无 CDN
 │   ├── index.html
 │   ├── css/style.css
 │   └── js/{app.js, charts.js}
 ├── assets/icon.ico
 ├── samples/                    # 12 份示例简历（含 PDF）
-├── tests/                      # 106 项测试
+├── tests/                      # 38 项测试（test_ai_pipeline.py）
 ├── docs/screenshots/
-└── tools/                      # 示例生成、图标、界面自检、exe 验收
+└── tools/
+    ├── make_samples.py         # 生成示例简历
+    ├── make_icon.py            # 生成图标
+    ├── release.py              # 推送源码 + 上传 zip 到 Release
+    └── *_probe*.py             # 界面/打包自检脚本（开发用）
 ```
 
-### 数据目录
+### 数据目录（便携）
+
+数据默认放在**程序目录下的 `data/`**：
 
 ```
-%APPDATA%\ResumeGacha\
-├── config.yaml     # 你的配置
-├── data.db         # 评分结果、结构化信息、人工评价
-├── resumes/        # 导入的简历副本
-├── exports/        # 导出文件
-└── logs/app.log    # 日志（自动轮转、已脱敏）
+ResumeTap/
+└── data/
+    ├── config.yaml     # 你的配置（API Key、岗位、筛选规则、阈值）
+    ├── data.db         # 简历库与 AI 评估结果
+    ├── resumes/        # 导入的简历文件副本
+    ├── exports/        # 导出的 CSV / JSON / Markdown
+    └── logs/app.log    # 运行日志（自动轮转、已脱敏）
 ```
+
+**定位规则**（按优先级）：
+
+1. 环境变量 `RESUME_TAP_DATA_DIR` 指定的目录
+2. 打包版：`<程序目录>/data`（便携模式）
+3. 源码运行：`<项目>/.devdata`
+4. 程序目录不可写时（例如装在 `C:\Program Files`）→ 回退 `%APPDATA%\ResumeGacha`
+
+从旧版（v3.0 及更早）升级时，首次启动会自动把 `%APPDATA%\ResumeGacha` 里的
+配置与数据库**复制**到新的 `data/` 目录，源目录保留不删。
 
 ---
 
@@ -497,7 +574,10 @@ resume-gacha/
 
 **换电脑怎么迁移？**
 
-复制整个 `%APPDATA%\ResumeGacha` 到新电脑同名位置。
+便携版：直接复制整个 `ResumeTap` 文件夹到新电脑，数据在 `data/` 内一并带走。
+
+如果程序装在无写入权限的位置（数据落在 `%APPDATA%\ResumeGacha`），
+把那个目录一起复制过去即可。
 
 ---
 
@@ -515,7 +595,7 @@ resume-gacha/
 
 | # | 验收项 | 结果 | 证据 |
 |---|---|---|---|
-| 1 | 双击 exe 启动，无需开发环境 | ✅ | 单文件 exe，独立启动自动建库 |
+| 1 | 解压 zip 后双击 exe 即可运行 | ✅ | 便携目录自包含，数据写在 data/ |
 | 2 | **规则引擎已移除** | ✅ | `scoring.py` 删除，配置中无 `scoring` 段 |
 | 3 | 纯 AI 驱动评分 | ✅ | 分数、等级、优缺点全部来自模型 |
 | 4 | 岗位画像与筛选规则传给 AI | ✅ | 提示词含岗位核心能力、年限/学历/关键词规则、SSR/SR 阈值 |
@@ -534,8 +614,8 @@ resume-gacha/
 | 17 | 简历库全选 / Ctrl+A | ✅ | 全选当前筛选结果，不误删隐藏项 |
 | 18 | 可查看评分理由与详情 | ✅ | 五维理由、优缺点、简历原文 |
 | 19 | 导出含关键字段 | ✅ | CSV/JSON/MD 含评估状态、AI 模型、维度、优缺点 |
-| 20 | 自动化测试 | ✅ | 35 passed（纯 AI 流程） |
-| 21 | 构建可复现 | ✅ | `python build.py` 约 25 秒 |
+| 20 | 自动化测试 | ✅ | 38 passed（纯 AI 流程） |
+| 21 | 构建可复现 | ✅ | `python build.py` 约 25 秒，产出目录 + zip |
 
 ---
 
