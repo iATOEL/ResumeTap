@@ -14,7 +14,7 @@ if __name__ == "__main__":
 
             ctypes.windll.user32.MessageBoxW(
                 0, "程序启动失败：\n\n" + traceback.format_exc(limit=4),
-                "简历抽卡", 0x10,
+                "ResumeTap", 0x10,
             )
         except Exception:  # noqa: BLE001
             print(traceback.format_exc(), file=sys.stderr)

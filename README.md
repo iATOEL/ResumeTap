@@ -1,4 +1,4 @@
-# 简历TAP · Resume Tap
+# ResumeTap
 
 > 本地离线的简历速筛桌面应用。先选定要招的岗位，再逐份过简历：软件给出**优点、缺点、评分理由**，你只需按 `喜欢 / 不合适 / 稍后` 做决定。可选接入你自己的 AI 做二次复核。
 
@@ -29,7 +29,7 @@
 
 ### 方式一：直接运行 exe（推荐）
 
-从 [Releases](https://github.com/iATOEL/resume-screening-system/releases/latest) 下载 `ResumeTAP.exe`（即界面里的「简历TAP」），双击运行：
+从 [Releases](https://github.com/iATOEL/ResumeTap/releases/latest) 下载 `ResumeTap.exe`（即界面里的「ResumeTap」），双击运行：
 
 1. 首次启动自动创建配置与数据库
 2. 顶部先选择要招聘的岗位
@@ -350,7 +350,7 @@ curl -X POST -H "X-API-Token: $TOKEN" \
 .venv/Scripts/python.exe build.py --onedir   # 目录版（启动更快）
 ```
 
-产物：项目根目录的 `简历TAP.exe`（约 43 MB，已被 `.gitignore` 排除，不会误提交）
+产物：项目根目录的 `ResumeTap.exe`（约 43 MB，已被 `.gitignore` 排除，不会误提交）
 
 构建脚本会自动：生成图标 → 检查/生成示例简历 → 清理 → PyInstaller 打包。
 
@@ -358,7 +358,7 @@ curl -X POST -H "X-API-Token: $TOKEN" \
 
 ```bash
 .venv/Scripts/python.exe -m PyInstaller --noconfirm --clean --onefile \
-  --name "简历TAP" --windowed \
+  --name "ResumeTap" --windowed \
   --add-data "ui;ui" --add-data "assets;assets" --add-data "samples;samples" \
   --hidden-import webview.platforms.edgechromium \
   --icon assets/icon.ico \
@@ -469,7 +469,7 @@ resume-gacha/
 
 | # | 验收项 | 结果 | 证据 |
 |---|---|---|---|
-| 1 | 双击 exe 启动，无需开发环境 | ✅ | `简历TAP.exe` 在主目录，独立启动自动建库 |
+| 1 | 双击 exe 启动，无需开发环境 | ✅ | `ResumeTap.exe` 在主目录，独立启动自动建库 |
 | 2 | 先选岗位再速筛 | ✅ | 未选岗位显示岗位选择页，选中后进入队列 |
 | 3 | 切换岗位后全库重新评分 | ✅ | 后端 vs 前端评分不同，自动重算 |
 | 4 | 卡片显示毕业院校全名与层级 | ✅ | 逐段列出「浙江大学 · C9」等 |

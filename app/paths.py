@@ -4,9 +4,10 @@ import os
 import sys
 from pathlib import Path
 
+# 数据目录名：沿用 Resumegacha 时期的目录，避免老用户升级后数据丢失
 APP_NAME = "ResumeGacha"
-APP_TITLE = "简历TAP"
-APP_VERSION = "2.2.0"
+APP_TITLE = "ResumeTap"
+APP_VERSION = "2.2.1"
 
 
 def resource_dir() -> Path:

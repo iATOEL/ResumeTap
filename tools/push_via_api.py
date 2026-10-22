@@ -20,7 +20,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 OWNER = "iATOEL"
-REPO = "resume-screening-system"
+REPO = "ResumeTap"
 BRANCH = "main"
 API = "https://api.github.com"
 
@@ -114,7 +114,7 @@ def main() -> int:
 
     # 5. commit
     message = (
-        "feat: 重建为简历TAP（桌面端简历速筛）\n"
+        "feat: 重建为ResumeTap（桌面端简历速筛）\n"
         "\n"
         "- 从 FastAPI Web 应用重构为 pywebview 桌面应用，打包为单文件 exe\n"
         "- 约会软件式逐份速筛：自动给出优点/不足，支持 喜欢 / 不合适 / 稍后\n"

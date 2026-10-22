@@ -182,7 +182,7 @@ def _migrate(raw: dict) -> tuple[dict, bool]:
     return raw, True
 
 
-CONFIG_TEMPLATE = """# 简历抽卡 · 配置文件
+CONFIG_TEMPLATE = """# ResumeTap · 配置文件
 # 修改后可在应用「设置」页点击“保存并重新评分”，或直接重启应用。
 # 本文件保存在用户数据目录，升级/重装 exe 不会丢失。
 

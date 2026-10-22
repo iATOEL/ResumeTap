@@ -1,7 +1,7 @@
 """对已运行的 exe 做验收（速筛界面版）。
 
 用法：
-    RESUME_GACHA_CDP_PORT=9335 dist/简历抽卡.exe
+    RESUME_GACHA_CDP_PORT=9335 dist/ResumeTap.exe
     RESUME_GACHA_CDP_PORT=9335 python tools/exe_verify.py
 """
 

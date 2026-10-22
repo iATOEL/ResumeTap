@@ -203,7 +203,7 @@ class _Handler(BaseHTTPRequestHandler):
     # ---------- 具体实现 ----------
     def _describe(self) -> dict:
         return {
-            "name": "简历抽卡 · 本地 AI 审查 API",
+            "name": "ResumeTap · 本地 AI 审查 API",
             "version": APP_VERSION,
             "auth": "在请求头加入 X-API-Token: <token>",
             "endpoints": {
