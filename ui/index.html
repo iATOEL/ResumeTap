@@ -98,7 +98,7 @@
     </div>
 
     <div class="sidebar-section" id="aiSidebarSection">
-      <div class="sidebar-label">AI 复核</div>
+      <div class="sidebar-label">AI 评估</div>
       <button class="side-item" id="btnAiSidebar">
         <span class="side-avatar gray" id="aiSidebarDot">○</span>
         <span class="label-text" id="aiSidebarText">未启用</span>
@@ -122,12 +122,20 @@
           <div class="progress-track"><div class="progress-fill" id="screenProgressBar"></div></div>
         </div>
 
-        <div class="ai-toggle-bar" id="aiToggleBar">
-          <label class="ai-switch">
-            <input type="checkbox" id="optAiReview">
-            <span id="aiToggleText">本条使用 AI 审查</span>
-          </label>
-          <span class="ai-hint" id="aiToggleHint">未配置 AI</span>
+        <div class="queue-bar" id="queueBar">
+          <div class="queue-info">
+            <span class="queue-dot" id="queueDot"></span>
+            <span id="queueStateText">未开始</span>
+            <span class="queue-detail" id="queueDetail"></span>
+          </div>
+          <div class="queue-actions">
+            <button class="btn btn-sm btn-primary" id="btnQueueStart">开始评估</button>
+            <button class="btn btn-sm" id="btnQueuePause">暂停</button>
+            <button class="btn btn-sm btn-ghost" id="btnQueueRetry">重试失败</button>
+          </div>
+        </div>
+        <div class="queue-progress hidden" id="queueProgress">
+          <div class="progress-track"><div class="progress-fill" id="queueProgressFill"></div></div>
         </div>
 
         <div id="screenStage"></div>
@@ -258,14 +266,6 @@
             </div>
           </div>
 
-          <!-- 权重 -->
-          <div class="card-panel">
-            <div class="panel-head">
-              <div><h3>评分权重</h3><p>保存时自动归一化，不必凑满 100%</p></div>
-            </div>
-            <div class="panel-body" id="weightFields"></div>
-          </div>
-
           <!-- 岗位 -->
           <div class="card-panel">
             <div class="panel-head">
@@ -329,11 +329,11 @@
           <!-- AI 复核（用户自备接口） -->
           <div class="card-panel">
             <div class="panel-head">
-              <div><h3>AI 复核（可选）</h3><p>填入你自己的 OpenAI 兼容接口，用于替代或补充规则评分</p></div>
+              <div><h3>AI 评估（必需）</h3><p>本软件为纯 AI 驱动，未配置时无法评估简历</p></div>
             </div>
             <div class="panel-body">
               <label class="switch-row">
-                <span>启用 AI 复核</span>
+                <span>启用 AI 评估</span>
                 <input type="checkbox" id="optAiEnabled">
               </label>
               <label class="field" style="margin-top:10px">
@@ -355,17 +355,15 @@
                 </label>
               </div>
               <label class="switch-row">
-                <span>AI 结果替换规则引擎（关闭则仅作参考）</span>
-                <input type="checkbox" id="optAiReplace">
+                <span>导入后自动开始评估</span>
+                <input type="checkbox" id="optAiAutoStart">
               </label>
               <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
                 <button class="btn btn-sm btn-primary" id="btnAiTest">测试连接</button>
-                <button class="btn btn-sm" id="btnAiBatchAll">AI 复核全部简历</button>
-                <button class="btn btn-sm" id="btnAiBatchPending">仅复核未复核的</button>
-                <button class="btn btn-sm btn-ghost" id="btnAiRevert">撤销 AI 复核</button>
+                <button class="btn btn-sm" id="btnRequeueAll">全部重新评估</button>
               </div>
               <p class="panel-desc" style="margin-top:10px;margin-bottom:0">
-                留空或关闭时完全离线；Key 只写入本机 config.yaml，不会上传到任何第三方（除你自己填的接口）。
+                Key 只写入本机 config.yaml，仅发送到你自己填写的接口。未配置时导入的简历会停在"待评估"，不会产生任何分数。
               </p>
             </div>
           </div>

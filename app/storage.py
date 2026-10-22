@@ -29,11 +29,10 @@ CREATE TABLE IF NOT EXISTS candidates (
     created_at TEXT DEFAULT '',
     review_verdict TEXT DEFAULT '',   -- liked / passed / skipped / ''
     review_note TEXT DEFAULT '',
-    reviewed_at TEXT DEFAULT ''
+    reviewed_at TEXT DEFAULT '',
+    eval_status TEXT DEFAULT 'pending',  -- pending / running / done / error
+    eval_error TEXT DEFAULT ''
 );
-CREATE INDEX IF NOT EXISTS idx_candidates_score ON candidates(overall_score DESC);
-CREATE INDEX IF NOT EXISTS idx_candidates_rarity ON candidates(rarity);
-
 CREATE TABLE IF NOT EXISTS meta (
     key TEXT PRIMARY KEY,
     value TEXT
@@ -49,14 +48,25 @@ MIGRATIONS = {
     "review_verdict": "ALTER TABLE candidates ADD COLUMN review_verdict TEXT DEFAULT ''",
     "review_note": "ALTER TABLE candidates ADD COLUMN review_note TEXT DEFAULT ''",
     "reviewed_at": "ALTER TABLE candidates ADD COLUMN reviewed_at TEXT DEFAULT ''",
+    "eval_status": "ALTER TABLE candidates ADD COLUMN eval_status TEXT DEFAULT 'pending'",
+    "eval_error": "ALTER TABLE candidates ADD COLUMN eval_error TEXT DEFAULT ''",
 }
 
 
+INDEXES = """
+CREATE INDEX IF NOT EXISTS idx_candidates_score ON candidates(overall_score DESC);
+CREATE INDEX IF NOT EXISTS idx_candidates_rarity ON candidates(rarity);
+CREATE INDEX IF NOT EXISTS idx_candidates_eval ON candidates(eval_status);
+"""
+
+
 def _migrate(conn: sqlite3.Connection) -> None:
+    """先补列，再建索引——索引可能引用新列。"""
     existing = {row["name"] for row in conn.execute("PRAGMA table_info(candidates)")}
     for column, statement in MIGRATIONS.items():
         if column not in existing:
             conn.execute(statement)
+    conn.executescript(INDEXES)
 
 
 def _connect() -> sqlite3.Connection:
@@ -124,6 +134,8 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
         "review_verdict": row["review_verdict"] or "",
         "review_note": row["review_note"] or "",
         "reviewed_at": row["reviewed_at"] or "",
+        "eval_status": row["eval_status"] or "pending",
+        "eval_error": row["eval_error"] or "",
         "has_raw_text": bool(row["raw_text"]),
         "profile": payload.get("profile", {}),
         "dimensions": payload.get("dimensions", []),
@@ -146,13 +158,13 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
 
 
 def insert_candidate(*, name: str, filename: str, stored_path: str, file_hash: str,
-                     raw_text: str, payload: dict) -> int:
+                     raw_text: str, payload: dict, eval_status: str = "pending") -> int:
     with session() as conn:
         cursor = conn.execute(
             """INSERT INTO candidates
                (name, filename, stored_path, file_hash, raw_text, overall_score, rarity,
-                status, role, years, degree, school, summary, payload, created_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                status, role, years, degree, school, summary, payload, created_at, eval_status)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 name, filename, stored_path, file_hash, raw_text,
                 payload.get("overall_score", 0.0), payload.get("rarity", "R"),
@@ -161,9 +173,61 @@ def insert_candidate(*, name: str, filename: str, stored_path: str, file_hash: s
                 payload.get("school", ""), payload.get("summary", ""),
                 json.dumps(payload, ensure_ascii=False),
                 datetime.now().isoformat(timespec="seconds"),
+                eval_status,
             ),
         )
         return int(cursor.lastrowid)
+
+
+# ---------------------------------------------------------------- 评估状态
+
+def set_eval_status(candidate_id: int, status: str, error: str = "") -> bool:
+    with session() as conn:
+        cursor = conn.execute(
+            "UPDATE candidates SET eval_status=?, eval_error=? WHERE id=?",
+            (status, error[:300], candidate_id),
+        )
+        return cursor.rowcount > 0
+
+
+def list_by_eval_status(*statuses: str, limit: int = 0) -> list[dict]:
+    """按评估状态取简历；error 状态会被视为"可重试"，排在 pending 之后。"""
+    if not statuses:
+        return []
+    placeholders = ",".join("?" for _ in statuses)
+    sql = f"SELECT * FROM candidates WHERE eval_status IN ({placeholders})"
+    # pending 优先，其次 error
+    sql += " ORDER BY CASE eval_status WHEN 'pending' THEN 0 ELSE 1 END, id ASC"
+    if limit > 0:
+        sql += f" LIMIT {int(limit)}"
+    with session() as conn:
+        rows = conn.execute(sql, statuses).fetchall()
+    return [_row_to_dict(row) for row in rows]
+
+
+def count_by_eval_status(*statuses: str) -> int:
+    if not statuses:
+        return 0
+    placeholders = ",".join("?" for _ in statuses)
+    with session() as conn:
+        row = conn.execute(
+            f"SELECT COUNT(*) AS n FROM candidates WHERE eval_status IN ({placeholders})",
+            statuses,
+        ).fetchone()
+    return int(row["n"]) if row else 0
+
+
+def eval_summary() -> dict:
+    with session() as conn:
+        rows = conn.execute(
+            "SELECT eval_status, COUNT(*) AS n FROM candidates GROUP BY eval_status"
+        ).fetchall()
+    counts = {"pending": 0, "running": 0, "done": 0, "error": 0}
+    for row in rows:
+        counts[row["eval_status"] or "pending"] = row["n"]
+    total = sum(counts.values())
+    return {"total": total, **counts,
+            "progress": round(counts["done"] / total * 100, 1) if total else 0.0}
 
 
 def update_candidate(candidate_id: int, payload: dict) -> bool:
@@ -294,3 +358,11 @@ def rename_filename(candidate_id: int, filename: str) -> bool:
         cursor = conn.execute(
             "UPDATE candidates SET filename=? WHERE id=?", (filename, candidate_id))
         return cursor.rowcount > 0
+
+
+def reset_running_to_pending() -> int:
+    """把因暂停/退出而中断的 running 记录退回 pending。"""
+    with session() as conn:
+        cursor = conn.execute(
+            "UPDATE candidates SET eval_status='pending' WHERE eval_status='running'")
+        return cursor.rowcount

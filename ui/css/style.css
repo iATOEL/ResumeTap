@@ -1542,3 +1542,88 @@ details.collapse[open] summary::before { content: "▾ "; }
 .custom-role-box p { font-size: 11.5px; color: var(--text-2); margin-bottom: 10px; text-align: left; }
 .custom-role-box .field { margin-bottom: 10px; }
 .custom-role-box .field:last-child { margin-bottom: 0; }
+
+/* ==========================================================================
+   AI 评估队列控制条
+   ========================================================================== */
+.queue-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  margin-bottom: 10px;
+  border-radius: var(--radius-lg);
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.queue-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.queue-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-3);
+  flex-shrink: 0;
+}
+.queue-dot.on {
+  background: var(--success);
+  box-shadow: 0 0 0 3px rgba(66, 183, 42, 0.18);
+  animation: pulseDot 1.4s ease-in-out infinite;
+}
+.queue-dot.paused { background: var(--warning); }
+.queue-dot.off { background: var(--text-3); }
+
+@keyframes pulseDot {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.45; }
+}
+
+.queue-detail {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-2);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.queue-actions { display: flex; gap: 6px; flex-shrink: 0; }
+
+.queue-progress { margin-bottom: 12px; }
+.queue-progress .progress-track { height: 5px; }
+
+@media (max-width: 720px) {
+  .queue-detail { display: none; }
+  .queue-actions { width: 100%; }
+  .queue-actions .btn { flex: 1; }
+}
+
+/* 待评估占位样式 */
+.pending-score {
+  color: var(--text-3) !important;
+  font-size: 14px !important;
+  font-weight: 600 !important;
+}
+.person-card.pending .person-avatar { background: #b9bec7; }
+.eval-error-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 20px;
+  padding: 0 7px;
+  border-radius: 10px;
+  font-size: 10.5px;
+  font-weight: 700;
+  background: var(--danger-soft);
+  color: var(--danger);
+}

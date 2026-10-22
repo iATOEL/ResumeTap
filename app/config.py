@@ -9,48 +9,6 @@ from . import paths
 from .rules import DEGREE_ORDER, ROLE_PROFILES
 
 DEFAULT_CONFIG: dict[str, Any] = {
-    "scoring": {
-        "weights": {
-            "skill": 0.22,
-            "experience": 0.18,
-            "education": 0.20,
-            "project": 0.18,
-            "keyword": 0.10,
-            "job_match": 0.12,
-        },
-        # 早期候选人（经验 < junior_years）自动提高学历权重、降低经验权重
-        "early_career": {
-            "enabled": True,
-            "junior_years": 2.0,
-            "education_multiplier": 1.75,
-            "experience_multiplier": 0.45,
-        },
-        "experience": {
-            "curve_divisor": 4.5,
-            "base": 15.0,
-            "seniority_bonus": 6.0,
-            "management_bonus": 3.0,
-            "max_years": 40.0,
-        },
-        "education": {
-            "c9_bonus": 26.0,
-            "c985_bonus": 20.0,
-            "overseas_top_bonus": 20.0,
-            "c211_bonus": 15.0,
-            "double_first_bonus": 12.0,
-            "overseas_known_bonus": 12.0,
-            "ordinary_bonus": 4.0,
-            "project_985_211_bonus": 6.0,
-        },
-        "project": {
-            "count_scores": [0, 45, 56, 66, 74, 80, 85],
-            "verb_bonus_per_item": 1.8,
-            "verb_bonus_max": 10.0,
-            "metric_bonus_per_item": 2.5,
-            "metric_bonus_max": 12.0,
-            "scale_bonus": 5.0,
-        },
-    },
     "rarity": {
         "ssr": 82.0,
         "sr": 66.0,
@@ -91,49 +49,16 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "api_key": "",
         "model": "gpt-4o-mini",
         "temperature": 0.2,
-        "timeout": 60,
-        "replace_rules": True,
+        "timeout": 90,
+        "auto_start": True,
     },
 }
 
-CONFIG_VERSION = 5
+CONFIG_VERSION = 6
 
 # 旧版本配置升级：patch 里的键一律以新默认值为准（这些是算法常量，不是用户偏好）
 MIGRATIONS = [
-    (1, {
-        "scoring.project": {
-            "count_scores": [0, 45, 56, 66, 74, 80, 85],
-            "verb_bonus_per_item": 1.8,
-            "verb_bonus_max": 10.0,
-            "metric_bonus_per_item": 2.5,
-            "metric_bonus_max": 12.0,
-            "scale_bonus": 5.0,
-        },
-    }),
-    (2, {
-        "scoring.education": {
-            "c9_bonus": 26.0,
-            "c985_bonus": 20.0,
-            "overseas_top_bonus": 20.0,
-            "c211_bonus": 15.0,
-            "double_first_bonus": 12.0,
-            "overseas_known_bonus": 12.0,
-            "ordinary_bonus": 4.0,
-            "project_985_211_bonus": 6.0,
-        },
-    }),
-    (4, {
-        # 学历权重上调：同等经验下院校差异要能拉开档位
-        "scoring.weights": {
-            "skill": 0.22, "experience": 0.18, "education": 0.20,
-            "project": 0.18, "keyword": 0.10, "job_match": 0.12,
-        },
-        "scoring.early_career": {
-            "enabled": True, "junior_years": 2.0,
-            "education_multiplier": 1.75, "experience_multiplier": 0.45,
-        },
-        "api.enabled": False,
-    }),
+    (4, {"api.enabled": False}),
 ]
 
 
@@ -143,6 +68,13 @@ def _drop_legacy_keys(raw: dict) -> None:
     if isinstance(education, dict):
         education.pop("top_school_bonus", None)
         education.pop("tier1_school_bonus", None)
+    # 纯 AI 驱动后不再有规则权重与 replace_rules
+    raw.pop("scoring", None)
+    llm = raw.get("llm")
+    if isinstance(llm, dict):
+        llm.pop("replace_rules", None)
+        llm.setdefault("auto_start", True)
+        llm.setdefault("timeout", 90)
 
 
 def _set_path(data: dict, dotted: str, value: Any) -> None:
@@ -188,45 +120,6 @@ CONFIG_TEMPLATE = """# ResumeTap · 配置文件
 # 修改后可在应用「设置」页点击“保存并重新评分”，或直接重启应用。
 # 本文件保存在用户数据目录，升级/重装 exe 不会丢失。
 
-scoring:
-  # 六维评分权重（会自动归一化，无需严格等于 1）
-  weights:
-    skill: 0.22        # 技能匹配
-    experience: 0.18   # 经验年限
-    education: 0.20    # 教育背景（学历 + 院校层级）
-    project: 0.18      # 项目经历
-    keyword: 0.10      # 自定义关键词命中
-    job_match: 0.12    # 岗位匹配度
-  # 应届 / 早期候选人保护：经验少时不让"学历差距"被经验分淹没
-  early_career:
-    enabled: true
-    junior_years: 2.0          # 经验低于此值视为早期候选人
-    education_multiplier: 1.75 # 学历权重放大倍数
-    experience_multiplier: 0.45 # 经验权重压低倍数
-  experience:
-    curve_divisor: 4.5   # 年限得分曲线，越小越早拿高分
-    base: 15.0           # 应届基础分
-    seniority_bonus: 6.0 # 高级/资深/架构师等头衔加分
-    management_bonus: 3.0
-    max_years: 40.0
-  education:
-    # 院校层级加分（学历基准分之上叠加）
-    c9_bonus: 26.0            # C9 联盟
-    c985_bonus: 20.0          # 985
-    overseas_top_bonus: 20.0  # 海外顶尖
-    c211_bonus: 15.0          # 211
-    double_first_bonus: 12.0  # 双一流
-    overseas_known_bonus: 12.0
-    ordinary_bonus: 4.0       # 普通本科
-    project_985_211_bonus: 6.0  # 院校库未收录但简历自称 985/211
-  project:
-    count_scores: [0, 45, 56, 66, 74, 80, 85]  # 0~6 个项目的基准分
-    verb_bonus_per_item: 1.8
-    verb_bonus_max: 10.0
-    metric_bonus_per_item: 2.5
-    metric_bonus_max: 12.0
-    scale_bonus: 5.0
-
 rarity:
   ssr: 82     # 综合分 >= 82 为 SSR
   sr: 66      # 综合分 >= 66 为 SR，其余为 R
@@ -268,16 +161,16 @@ api:
 privacy:
   store_raw_text: true     # 是否保存简历原文（关闭后仅保留评分与结构化信息）
 
-# AI 复核（可选）：填入你自己的 OpenAI 兼容接口后，可在速筛页对单份简历开启 AI 审查
-# 留空或 enabled: false 时完全不联网
+# AI 评估（必需）：本软件为纯 AI 驱动，未配置时无法进行简历评估
+# 支持任何 OpenAI 兼容接口（OpenAI / DeepSeek / 通义 / 本地 Ollama 等）
 llm:
-  enabled: false           # 必须填 api_key 后才会生效
+  enabled: false           # 必须勾选并填 api_key 才可用
   base_url: https://api.openai.com/v1
   api_key: ""
   model: gpt-4o-mini
   temperature: 0.2
-  timeout: 60
-  replace_rules: true      # true=AI 结果替换规则引擎的分数与优缺点
+  timeout: 90
+  auto_start: true         # 导入后自动开始评估；false 则需手动点"开始评估"
 """
 
 
@@ -313,21 +206,6 @@ def _as_list(value: Any) -> list[str]:
 def normalize(config: dict) -> dict:
     """把任意来源的配置整理为合法结构（越界值会被修正）。"""
     cfg = _deep_merge(DEFAULT_CONFIG, config if isinstance(config, dict) else {})
-
-    weights = cfg["scoring"].get("weights") or {}
-    cleaned = {key: _as_float(weights.get(key), DEFAULT_CONFIG["scoring"]["weights"][key], 0.0, 1.0)
-               for key in DEFAULT_CONFIG["scoring"]["weights"]}
-    total = sum(cleaned.values())
-    if total <= 0:
-        cleaned = dict(DEFAULT_CONFIG["scoring"]["weights"])
-        total = sum(cleaned.values())
-    cfg["scoring"]["weights"] = {key: round(value / total, 4) for key, value in cleaned.items()}
-
-    early = cfg["scoring"]["early_career"]
-    early["enabled"] = bool(early.get("enabled", True))
-    early["junior_years"] = _as_float(early.get("junior_years"), 2.0, 0.0, 10.0)
-    early["education_multiplier"] = _as_float(early.get("education_multiplier"), 1.75, 1.0, 5.0)
-    early["experience_multiplier"] = _as_float(early.get("experience_multiplier"), 0.45, 0.1, 1.0)
 
     rarity = cfg["rarity"]
     ssr = _as_float(rarity.get("ssr"), 82.0, 1.0, 100.0)
@@ -377,8 +255,8 @@ def normalize(config: dict) -> dict:
     llm["api_key"] = str(llm.get("api_key") or "")
     llm["model"] = str(llm.get("model") or DEFAULT_CONFIG["llm"]["model"])
     llm["temperature"] = _as_float(llm.get("temperature"), 0.2, 0.0, 1.0)
-    llm["timeout"] = int(_as_float(llm.get("timeout"), 60, 10, 300))
-    llm["replace_rules"] = bool(llm.get("replace_rules", True))
+    llm["timeout"] = int(_as_float(llm.get("timeout"), 90, 10, 300))
+    llm["auto_start"] = bool(llm.get("auto_start", True))
     if not llm["api_key"].strip():
         llm["enabled"] = False
 

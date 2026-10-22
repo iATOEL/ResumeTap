@@ -1,118 +1,83 @@
 # ResumeTap · 配置示例
 #
-# 说明：
-# 1. 应用首次启动时会在 %APPDATA%\ResumeGacha\config.yaml 生成带注释的默认配置；
-# 2. 本文件是「可直接替换」的示例，演示如何针对一个具体岗位收紧规则；
-# 3. 修改后可在应用「设置」页点击「保存并重新评分」立即生效，也可覆盖上述文件后重启应用。
-# 4. 所有权重会被自动归一化，不必严格加总为 1。
+# 本软件为纯 AI 驱动：分数、等级、优缺点全部由你配置的模型产出。
+# 应用首次启动会在 %APPDATA%\ResumeGacha\config.yaml 生成默认配置，
+# 也可以把本文件内容复制过去（注意填写你自己的 api_key）。
 
-scoring:
-  # 六维评分权重：技能 / 经验 / 学历 / 项目 / 关键词 / 岗位匹配
-  weights:
-    skill: 0.22        # 技能匹配
-    experience: 0.18   # 经验年限
-    education: 0.20    # 教育背景（学历 + 院校层级）
-    project: 0.18      # 项目经历
-    keyword: 0.10      # 自定义关键词
-    job_match: 0.12    # 岗位匹配
-  early_career:
-    enabled: true
-    junior_years: 2.0
-    education_multiplier: 1.75
-    experience_multiplier: 0.45
-  experience:
-    curve_divisor: 4.0   # 越小越早拿到高分（4.0 适合 3-8 年岗位）
-    base: 12.0           # 应届基础分
-    seniority_bonus: 6.0
-    management_bonus: 3.0
-    max_years: 40.0
-  education:
-    # 院校层级加分（叠加在学历基准分之上）
-    c9_bonus: 26.0
-    c985_bonus: 20.0
-    overseas_top_bonus: 20.0
-    c211_bonus: 15.0
-    double_first_bonus: 12.0
-    overseas_known_bonus: 12.0
-    ordinary_bonus: 4.0
-    project_985_211_bonus: 6.0
-  project:
-    count_scores: [0, 45, 56, 66, 74, 80, 85]
-    verb_bonus_per_item: 1.8
-    verb_bonus_max: 10.0
-    metric_bonus_per_item: 2.5
-    metric_bonus_max: 12.0
-    scale_bonus: 5.0
+# ============================================================
+# AI 评估（必需）
+# ============================================================
+llm:
+  enabled: true                     # 必须勾选并填 api_key 才可用
+  base_url: https://api.openai.com/v1   # 任何 OpenAI 兼容端点
+  api_key: "sk-your-key-here"
+  model: gpt-4o-mini
+  temperature: 0.2
+  timeout: 90                       # 单次请求超时（秒）
+  auto_start: true                  # 导入后自动开始评估；false = 手动点"开始评估"
 
+# ============================================================
+# 目标岗位（必填；空值表示尚未选择）
+# ============================================================
+# 内置岗位：backend 后端 / frontend 前端 / fullstack 全栈 / data 数据分析
+#   algorithm 算法 / test 测试 / ops 运维 / security 安全风控
+#   product 产品 / designer UI / ux 交互 / marketing 市场 / operations 运营
+#   sales 销售 / customer_service 客服 / media 媒体 / hr 人力 / finance 财务
+#   legal 法务 / engineering 机械硬件 / manufacturing 制造 / supply_chain 供应链
+#   logistics 物流 / civil 建筑 / medical 医疗 / education 教师 / general 通用
+#   auto = 让 AI 自行判断最匹配的岗位
+role: backend
+
+# 列表里没有的岗位：把 role 设为 custom，并填下面两项
+custom_role:
+  label: ""
+  keywords: []
+
+# ============================================================
+# 筛选规则（会写进提示词，由 AI 判断是否满足）
+# ============================================================
+screening:
+  min_score: 60           # 综合分低于此值视为不满足
+  min_years: 2            # 工作年限下限
+  required_degree: ""     # 不限 / 大专 / 本科 / 硕士 / 博士
+  must_keywords: []       # 必须命中的关键词
+  reject_keywords: []     # 出现即淘汰（如 外包、劳务派遣）
+
+# ============================================================
+# 稀有度阈值（由本地按分数换算，不采信模型返回值）
+# ============================================================
 rarity:
-  ssr: 80     # 综合分 >= 80 为 SSR（本岗位用 80，比默认 82 略宽松）
-  sr: 62      # 综合分 >= 62 为 SR，其余为 R
+  ssr: 82
+  sr: 66
   labels:
     SSR: 特级 · 传说
     SR: 高级 · 史诗
     R: 普通 · 稀有
 
-# 目标岗位（必填；空值表示尚未选择）
-#   auto 自动识别 / backend 后端 / frontend 前端 / fullstack 全栈
-#   data 数据分析 / algorithm 算法 / product 产品 / test 测试 / ops 运维
-role: backend
+# 额外关键词：仅用于评分提示词补充（可选）
+keywords: []
+jd_text: ""
 
-# 自定义关键词：留空则「关键词命中」维度不计入综合分。
-# 一旦填写，该维度按命中比例计分，适合强调必须掌握的硬技能。
-keywords:
-  - Java
-  - Spring Boot
-  - MySQL
-  - Redis
-  - 微服务
-  - 高并发
-
-# 岗位 JD 原文：可选。若 keywords 为空且填写了 JD，
-# 系统会自动从 JD 中提取高频技术词作为关键词。
-jd_text: |
-  岗位职责：
-  1. 负责交易核心系统的后端开发与架构优化；
-  2. 参与微服务拆分与治理，保障高并发场景下的系统稳定性；
-  3. 与产品、前端协作完成需求交付。
-  任职要求：
-  1. 本科及以上学历，3 年以上 Java 后端开发经验；
-  2. 熟悉 Spring Boot、Spring Cloud、MySQL、Redis、Kafka；
-  3. 熟悉 Docker、Kubernetes，有 CI/CD 实践经验；
-  4. 有高并发、分布式系统经验者优先。
-
-screening:
-  min_score: 55          # 综合分低于 55 直接淘汰
-  min_years: 2           # 少于 2 年经验直接淘汰
-  required_degree: ""    # 不限 / 大专 / 本科 / 硕士 / 博士
-  must_keywords:         # 必须全部命中，否则淘汰
-    - Java
-  reject_keywords:       # 命中任意一个即淘汰
-    - 外包
-    - 劳务派遣
-
+# ============================================================
+# 界面
+# ============================================================
 ui:
-  theme: light       # 固定浅色（Facebook 风格）
-  view: list         # list / grid
-  sound: true        # 界面音效开关
-  animation: true    # 卡片切换动画
+  theme: light
+  view: list
+  sound: true
+  animation: true
 
-# 本地 AI 审查 API：仅监听 127.0.0.1
+# ============================================================
+# 对外审查 API（默认关闭，供外部 AI / Agent 读写）
+# ============================================================
 api:
-  enabled: false     # 默认关闭；在设置页手动启动后可用
+  enabled: false
   port: 8765
 
+# ============================================================
+# 隐私
+# ============================================================
 privacy:
-  # true：保存简历原文，便于在详情中复核；
-  # false：只保留评分与结构化信息，原文不落盘（导入后无法重新评分）。
+  # true：保存简历原文（重新评估、查看原文需要它）
+  # false：只保留解析结果，之后无法重新评估
   store_raw_text: true
-
-# 可选：接入 LLM 做二次复核（默认关闭，应用完全离线运行）
-# AI 复核（可选）：填入你自己的接口后，可在速筛页对单份简历开启
-llm:
-  enabled: false           # 不填 api_key 时强制关闭
-  base_url: https://api.openai.com/v1
-  api_key: ""
-  model: gpt-4o-mini
-  temperature: 0.2
-  timeout: 60
-  replace_rules: true      # true=AI 结果替换规则引擎

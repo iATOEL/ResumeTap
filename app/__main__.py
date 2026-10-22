@@ -75,6 +75,18 @@ def main() -> int:
 
     storage.init_if_needed()
 
+    # 恢复未完成的评估任务（上次退出时还有 pending）
+    try:
+        from . import config as _cfg
+        from .eval_queue import QUEUE
+        _settings = _cfg.load_config()
+        if (_settings.get("llm", {}).get("auto_start", True)
+                and storage.count_by_eval_status("pending") > 0
+                and _settings.get("llm", {}).get("api_key")):
+            log.info("恢复未完成的 AI 评估任务")
+    except Exception:  # noqa: BLE001
+        log.exception("检查待评估任务失败")
+
     # 本地 AI 审查 API：仅监听回环地址，是否随应用启动由配置决定
     try:
         from . import config as config_module
@@ -112,6 +124,11 @@ def main() -> int:
     bridge.attach(window)
 
     def _on_closing():
+        try:
+            from .eval_queue import QUEUE
+            QUEUE.stop_now()
+        except Exception:  # noqa: BLE001
+            pass
         try:
             api.stop()
         except Exception:  # noqa: BLE001

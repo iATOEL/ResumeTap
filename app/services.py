@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Callable, Iterable, Optional
 
 from . import config as config_module
-from . import extractor, parser, scoring, storage
+from . import extractor, parser, storage
 from .paths import exports_dir, resumes_dir
 
 log = logging.getLogger("resume_gacha")
@@ -40,6 +40,51 @@ def _unique_path(directory: Path, filename: str) -> Path:
         if not candidate.exists():
             return candidate
     return directory / f"{stem}_{int(time.time())}{suffix}"
+
+
+def _pending_payload(text: str, filename: str) -> dict:
+    """导入时的占位载荷：只有客观信息，没有分数。"""
+    ext = extractor.extract(text, filename)
+    return {
+        "name": ext.name,
+        "filename": filename,
+        "overall_score": 0.0,
+        "rarity": "R",
+        "rarity_label": "待评估",
+        "status": "pass",
+        "screen_reasons": [],
+        "strengths": [],
+        "weaknesses": [],
+        "summary": "等待 AI 评估",
+        "news_flash": "等待 AI 评估",
+        "dimensions": [],
+        "score_source": "",
+        "profile": ext.to_summary_dict(),
+        "sections": {
+            "education": ext.education_text,
+            "experience": ext.experience_text,
+            "projects": ext.project_text,
+            "skills": ext.skill_text,
+            "summary": ext.summary_text,
+            "awards": ext.awards_text,
+        },
+        "projects": [{"title": p.title, "description": p.description}
+                     for p in ext.projects[:10]],
+        "skill_hits": [],
+        "years": ext.years,
+        "years_source": ext.years_source,
+        "degree": ext.degree,
+        "school": ext.school,
+        "school_tier": ext.school_tier,
+        "school_tier_label": ext.school_tier_label,
+        "major": ext.major,
+        "contact": {"phone": ext.phone, "email": ext.email},
+        "role_title": ext.role_title,
+        "detected_role": "",
+        "detected_role_label": "",
+        "role_selected": True,
+        "education_source": ext.education_source,
+    }
 
 
 def import_files(paths: Iterable[str], config: dict,
@@ -84,14 +129,10 @@ def import_files(paths: Iterable[str], config: dict,
             continue
 
         if progress:
-            progress({"index": index, "total": total, "filename": filename, "stage": "scoring"})
+            progress({"index": index, "total": total, "filename": filename, "stage": "queued"})
 
-        try:
-            payload = scoring.evaluate(text, filename, config)
-        except Exception as exc:  # noqa: BLE001
-            log.exception("评分 %s 失败", filename)
-            failures.append({"filename": filename, "error": f"评分失败：{exc}"})
-            continue
+        # 只做客观解析，评分交给 AI 队列（此时还没有分数）
+        payload = _pending_payload(text, filename)
 
         stored_path = ""
         try:
@@ -106,6 +147,7 @@ def import_files(paths: Iterable[str], config: dict,
             candidate_id = storage.insert_candidate(
                 name=payload["name"], filename=filename, stored_path=stored_path,
                 file_hash=digest, raw_text=raw_text, payload=payload,
+                eval_status="pending",
             )
         except Exception as exc:  # noqa: BLE001
             log.exception("写入数据库失败")
@@ -116,57 +158,32 @@ def import_files(paths: Iterable[str], config: dict,
             "id": candidate_id,
             "name": payload["name"],
             "filename": filename,
-            "overall_score": payload["overall_score"],
-            "rarity": payload["rarity"],
-            "summary": payload["summary"],
+            "eval_status": "pending",
         })
 
     return {"imported": imported, "duplicates": duplicates, "failures": failures,
             "total": total}
 
 
-def rescore_all(config: dict, keep_ai: bool = True) -> dict:
-    """配置变更后重新评分全部简历（不重新解析文件，使用已存原文）。
+def requeue_all(config: dict, only_failed: bool = False) -> dict:
+    """把所有简历重新标记为待评估（下一次开始队列时会重新调用 AI）。
 
-    keep_ai=True 时，已被 AI 复核过的简历保留 AI 结果，只记录"规则分已更新"，
-    避免切换岗位或改权重把 AI 复核的成果冲掉。
+    规则引擎已移除，改岗位/改规则后必须重新问 AI。
     """
     with storage.session() as conn:
-        rows = conn.execute("SELECT id, raw_text, payload FROM candidates").fetchall()
+        if only_failed:
+            cursor = conn.execute(
+                "UPDATE candidates SET eval_status='pending', eval_error='' "
+                "WHERE eval_status='error'")
+        else:
+            cursor = conn.execute(
+                "UPDATE candidates SET eval_status='pending', eval_error=''")
+        return {"queued": cursor.rowcount}
 
-    updated, skipped, kept_ai = 0, 0, 0
-    for row in rows:
-        raw_text = row["raw_text"] or ""
-        if not raw_text:
-            skipped += 1
-            continue
-        try:
-            import json
-            old = json.loads(row["payload"] or "{}")
-            filename = old.get("filename", "")
-            payload = scoring.evaluate(raw_text, filename, config)
 
-            if keep_ai and old.get("score_source") == "ai" and old.get("ai_review"):
-                # 保留 AI 的分数与优缺点，但更新岗位标签、院校信息等结构化字段
-                ai_block = old["ai_review"]
-                merged = dict(payload)
-                for key in ("overall_score", "rarity", "rarity_label",
-                            "strengths", "weaknesses", "news_flash", "dimensions"):
-                    if key in old:
-                        merged[key] = old[key]
-                merged["score_source"] = "ai"
-                merged["ai_review"] = ai_block
-                merged["rules_stale"] = True   # 规则分已变化，可提示重新复核
-                storage.update_candidate(row["id"], merged)
-                kept_ai += 1
-                continue
-
-            storage.update_candidate(row["id"], payload)
-            updated += 1
-        except Exception:  # noqa: BLE001
-            log.exception("重新评分失败 id=%s", row["id"])
-            skipped += 1
-    return {"updated": updated, "skipped": skipped, "kept_ai": kept_ai}
+# 兼容旧调用名
+def rescore_all(config: dict, keep_ai: bool = True) -> dict:
+    return requeue_all(config, only_failed=False)
 
 
 def statistics() -> dict:
@@ -176,28 +193,35 @@ def statistics() -> dict:
     status_counts = {"pass": 0, "flagged": 0, "rejected": 0}
     review_counts = {"": 0, "liked": 0, "passed": 0, "skipped": 0}
     scores, years = [], []
+    evaluated = 0
     for item in candidates:
         counts[item["rarity"]] = counts.get(item["rarity"], 0) + 1
         status_counts[item["status"]] = status_counts.get(item["status"], 0) + 1
         review_counts[item.get("review_verdict", "")] = review_counts.get(item.get("review_verdict", ""), 0) + 1
-        scores.append(item["overall_score"])
-        years.append(item.get("years") or 0)
+        if item.get("eval_status") == "done":
+            evaluated += 1
+            scores.append(item["overall_score"])
+            years.append(item.get("years") or 0)
 
     passed = status_counts["pass"]
-    best = max(candidates, key=lambda c: c["overall_score"], default=None)
+    best = max((c for c in candidates if c.get("eval_status") == "done"),
+               key=lambda c: c["overall_score"], default=None)
     reviewed = total - review_counts[""]
+    eval_stats = storage.eval_summary()
     return {
         "total": total,
+        "evaluated": evaluated,
+        "eval": eval_stats,
         "rarity_counts": counts,
         "status_counts": status_counts,
         "review_counts": review_counts,
         "reviewed": reviewed,
         "review_progress": round(reviewed / total * 100, 1) if total else 0.0,
-        "avg_score": round(sum(scores) / total, 1) if total else 0.0,
+        "avg_score": round(sum(scores) / evaluated, 1) if evaluated else 0.0,
         "max_score": round(max(scores), 1) if scores else 0.0,
-        "avg_years": round(sum(years) / total, 1) if total else 0.0,
-        "pass_rate": round(passed / total * 100, 1) if total else 0.0,
-        "ssr_rate": round(counts["SSR"] / total * 100, 1) if total else 0.0,
+        "avg_years": round(sum(years) / evaluated, 1) if evaluated else 0.0,
+        "pass_rate": round(passed / evaluated * 100, 1) if evaluated else 0.0,
+        "ssr_rate": round(counts["SSR"] / evaluated * 100, 1) if evaluated else 0.0,
         "best": {"name": best["name"], "score": best["overall_score"],
                  "rarity": best["rarity"]} if best else None,
     }
@@ -264,6 +288,12 @@ def export_candidates(fmt: str, candidate_ids: Optional[list[int]], config: dict
     return {"path": str(path), "count": len(all_items), "format": fmt}
 
 
+def _eval_label(item: dict) -> str:
+    status = item.get("eval_status") or "pending"
+    return {"pending": "待评估", "running": "评估中",
+            "done": "已评估", "error": "评估失败"}.get(status, status)
+
+
 def _dimension_text(item: dict) -> str:
     dims = {d.get("key"): d for d in item.get("dimensions", [])}
 
@@ -318,8 +348,8 @@ def _write_csv(path: Path, items: list[dict]) -> None:
         writer = csv.writer(handle)
         writer.writerow([
             "排名", "姓名", "电话", "邮箱", "稀有度", "综合分", "状态", "人工评价",
-            "技能命中数", "经验年限", "学历", "院校", "院校层级", "教育经历",
-            "文件名", "各维度分数", "命中技能", "优点", "不足", "评分来源",
+            "评估状态", "经验年限", "学历", "院校", "院校层级", "教育经历",
+            "文件名", "各维度分数", "AI 模型", "优点", "不足", "待评估原因",
             "评语", "导入时间",
         ])
         for index, item in enumerate(items, start=1):
@@ -332,14 +362,14 @@ def _write_csv(path: Path, items: list[dict]) -> None:
                 item["overall_score"],
                 {"pass": "通过", "flagged": "待复核", "rejected": "淘汰"}.get(item["status"], item["status"]),
                 {"liked": "喜欢", "passed": "不合适", "skipped": "稍后"}.get(item.get("review_verdict", ""), "未评价"),
-                len(item.get("skill_hits", [])), item.get("years", 0),
+                _eval_label(item), item.get("years", 0),
                 _csv_safe(item.get("degree", "")), _csv_safe(item.get("school", "")),
                 _csv_safe(item.get("school_tier_label", "")),
                 _csv_safe(_education_text(item)), _csv_safe(item["filename"]),
-                _dimension_text(item), _csv_safe(_hits_text(item)),
+                _dimension_text(item), _csv_safe(item.get("ai_model", "")),
                 _csv_safe("；".join(item.get("strengths", []))),
                 _csv_safe("；".join(item.get("weaknesses", []))),
-                "AI" if item.get("score_source") == "ai" else "规则",
+                _csv_safe(item.get("eval_error", "")),
                 _csv_safe(item.get("summary", "")),
                 item.get("created_at", ""),
             ])
@@ -351,7 +381,7 @@ def _write_json(path: Path, items: list[dict], config: dict) -> None:
         "exported_at": time.strftime("%Y-%m-%d %H:%M:%S"),
         "total": len(items),
         "thresholds": config["rarity"],
-        "weights": config["scoring"]["weights"],
+        "scoring": "AI（无规则引擎）",
         "role": config.get("role", ""),
         "candidates": [
             {
@@ -445,3 +475,26 @@ def load_state() -> dict:
         "stats": statistics(),
         "achievements": global_stats(),
     }
+
+
+def sync_role_labels(config: dict) -> int:
+    """把当前岗位名称同步到所有简历的展示标签（不改分数）。"""
+    from .eval_queue import _role_label_from_config
+    import json as _json
+
+    label = _role_label_from_config()
+    touched = 0
+    with storage.session() as conn:
+        rows = conn.execute("SELECT id, payload FROM candidates").fetchall()
+        for row in rows:
+            try:
+                payload = _json.loads(row["payload"] or "{}")
+            except _json.JSONDecodeError:
+                continue
+            if payload.get("detected_role_label") == label:
+                continue
+            payload["detected_role_label"] = label
+            conn.execute("UPDATE candidates SET payload=? WHERE id=?",
+                         (_json.dumps(payload, ensure_ascii=False), row["id"]))
+            touched += 1
+    return touched

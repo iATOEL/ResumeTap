@@ -26,14 +26,15 @@
     filterDegree: '',
     selected: new Set(),
     filteredIds: [],
-    queue: [],
+    reviewQueue: [],
     queueIndex: 0,
     current: null,
     drawerId: null,
     busy: false,
     apiInfo: null,
     aiStatus: null,
-    aiReviewRequested: false,
+    queue: null,
+    eval: null,
   };
 
   // ============ 基础工具 ============
@@ -150,6 +151,8 @@
     state.candidates = data.candidates || [];
     state.stats = data.stats;
     state.achievements = data.achievements || {};
+    state.queue = data.queue || null;
+    state.eval = data.eval || null;
     state.review = data.review || null;
     state.apiInfo = (data.meta && data.meta.api) || null;
     state.ready = true;
@@ -162,6 +165,8 @@
     if (result.stats) state.stats = result.stats;
     if (result.review) state.review = result.review;
     if (result.achievements) state.achievements = result.achievements;
+    if (result.eval) state.eval = result.eval;
+    if (result.queue) state.queue = result.queue;
   }
 
   // ============ 事件 ============
@@ -253,19 +258,11 @@
     });
 
     // AI 开关（速筛页）
-    $('optAiReview').addEventListener('change', async (e) => {
-      state.aiReviewRequested = e.target.checked;
-      if (e.target.checked && state.current) {
-        await runAiReview(state.current.id);
-      } else if (state.current) {
-        renderAiToggle(state.current);
-      }
-    });
-
+    $('btnQueueStart').addEventListener('click', startQueue);
+    $('btnQueuePause').addEventListener('click', pauseQueue);
+    $('btnQueueRetry').addEventListener('click', retryFailed);
     $('btnAiTest').addEventListener('click', testAiConnection);
-    $('btnAiBatchAll').addEventListener('click', () => batchAiReview(false));
-    $('btnAiBatchPending').addEventListener('click', () => batchAiReview(true));
-    $('btnAiRevert').addEventListener('click', revertAiReview);
+    $('btnRequeueAll').addEventListener('click', requeueAll);
     $('btnAiSidebar').addEventListener('click', () => switchView('settings'));
 
     // 音效
@@ -577,17 +574,18 @@
 
   // ============ 速筛队列 ============
   function buildQueue() {
-    const pending = state.candidates.filter((item) => !item.review_verdict);
-    // 排序：分数高的先看
+    // 只把已完成 AI 评估的简历排入速筛队列——没分数的简历没法判断
+    const pending = state.candidates.filter(
+      (item) => !item.review_verdict && item.eval_status === 'done');
     pending.sort((a, b) => b.overall_score - a.overall_score);
-    state.queue = pending;
+    state.reviewQueue = pending;
     state.queueIndex = 0;
     state.current = null;
   }
 
   function currentQueueItem() {
-    if (!state.queue.length) return null;
-    return state.queue[Math.min(state.queueIndex, state.queue.length - 1)] || null;
+    if (!state.reviewQueue.length) return null;
+    return state.reviewQueue[Math.min(state.queueIndex, state.reviewQueue.length - 1)] || null;
   }
 
   function refreshQueueFromState() {
@@ -596,10 +594,10 @@
       state.candidates.filter((c) => c.review_verdict).map((c) => c.id)
     );
     const currentId = state.current ? state.current.id : null;
-    state.queue = state.queue.filter((item) => !reviewed.has(item.id));
+    state.reviewQueue = state.reviewQueue.filter((item) => !reviewed.has(item.id));
     if (currentId) {
-      const index = state.queue.findIndex((item) => item.id === currentId);
-      state.queueIndex = index >= 0 ? index : Math.min(state.queueIndex, Math.max(0, state.queue.length - 1));
+      const index = state.reviewQueue.findIndex((item) => item.id === currentId);
+      state.queueIndex = index >= 0 ? index : Math.min(state.queueIndex, Math.max(0, state.reviewQueue.length - 1));
     }
   }
 
@@ -621,10 +619,14 @@
       state.current = null;
       stage.innerHTML = needJobHtml();
       bindJobOptions();
-      $('aiToggleBar').classList.add('hidden');
+      const qb = $('queueBar');
+      if (qb) qb.classList.add('hidden');
+      const qp = $('queueProgress');
+      if (qp) qp.classList.add('hidden');
       return;
     }
-    $('aiToggleBar').classList.remove('hidden');
+    const qb2 = $('queueBar');
+    if (qb2) qb2.classList.remove('hidden');
 
     refreshQueueFromState();
     const item = currentQueueItem();
@@ -639,11 +641,7 @@
     state.current = item;
     stage.innerHTML = screenCardHtml(item);
     bindScreenActions(item);
-    renderAiToggle(item);
-    if (!state.aiStatus) {
-      // 首次进入或外部改过配置时补查一次
-      refreshAiStatus();
-    }
+    if (!state.aiStatus) refreshAiStatus();
   }
 
   function needJobHtml() {
@@ -737,7 +735,10 @@
       buildQueue();
       syncJobPicker();
       renderAll();
-      toast(`已切换到自定义岗位「${label}」并重新评分`, 'success');
+      const doneCount = (state.eval || {}).done || 0;
+      toast(doneCount > 0
+        ? `已切换到「${label}」。已有分数来自上一个岗位，建议点「全部重新评估」`
+        : `已切换到自定义岗位「${label}」`, 'success');
     } catch (err) {
       toast(err.message, 'error');
     }
@@ -753,7 +754,10 @@
       syncJobPicker();
       renderAll();
       const label = (state.roles.find((r) => r.key === roleKey) || {}).label || '自动识别';
-      toast(`已切换到「${label}」并重新评分`, 'success');
+      const done = (state.eval || {}).done || 0;
+      toast(done > 0
+        ? `已切换到「${label}」。已有分数来自上一个岗位，建议点「全部重新评估」刷新`
+        : `已切换到「${label}」`, 'success');
     } catch (err) {
       toast(err.message, 'error');
     }
@@ -777,77 +781,6 @@
     if (roleSelect) roleSelect.value = current || '';
   }
 
-  function renderAiToggle(item) {
-    const aiReady = !!(state.aiStatus && state.aiStatus.ready);
-    const source = (item.payload && item.payload.score_source) || 'rules';
-    const checkbox = $('optAiReview');
-    const label = $('aiToggleText');
-    const hint = $('aiToggleHint');
-
-    checkbox.disabled = !aiReady;
-    // 已由 AI 评分的条目保持勾选；否则保留用户当前选择
-    if (source === 'ai') checkbox.checked = true;
-    else if (!state.aiReviewRequested) checkbox.checked = false;
-    label.parentElement.classList.toggle('disabled', !aiReady);
-
-    if (!aiReady) {
-      const why = state.aiStatus && state.aiStatus.has_key
-        ? '请先在设置页启用'
-        : '未配置 AI（设置页可填）';
-      hint.textContent = why;
-      label.textContent = '本条使用 AI 审查';
-    } else if (source === 'ai') {
-      hint.textContent = `已由 ${escapeHtml((item.payload.ai_review || {}).model || 'AI')} 复核`;
-      label.textContent = '本条正在使用 AI 审查结果';
-    } else {
-      hint.textContent = '勾选后对本条调用 AI';
-      label.textContent = '本条使用 AI 审查';
-    }
-  }
-
-  function doneEmptyHtml(total) {
-    if (!total) {
-      return `
-        <div class="screen-card">
-          <div class="review-done">
-            <div class="big-icon">▤</div>
-            <h3>还没有简历</h3>
-            <p>导入 PDF / DOCX / TXT 简历后即可开始逐份速筛。<br>系统会自动解析、评分并给出优缺点。</p>
-            <div class="empty-actions">
-              <button class="btn btn-primary btn-lg" data-act="import">导入简历</button>
-              <button class="btn btn-lg" data-act="samples">载入示例简历</button>
-            </div>
-          </div>
-        </div>`;
-    }
-    return `
-      <div class="screen-card">
-        <div class="review-done">
-          <div class="big-icon">✓</div>
-          <h3>全部简历都看过一遍了</h3>
-          <p>共处理 ${total} 份简历。可以到简历库复查，或导出筛选结果。</p>
-          <div class="empty-actions">
-            <button class="btn btn-primary btn-lg" data-act="library">查看简历库</button>
-            <button class="btn btn-lg" data-act="export">导出结果</button>
-            <button class="btn btn-lg" data-act="reset">重新开始</button>
-          </div>
-        </div>
-      </div>`;
-  }
-
-  function bindDoneActions() {
-    $$('#screenStage [data-act]').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const act = btn.dataset.act;
-        if (act === 'import') importViaDialog();
-        else if (act === 'samples') loadSamples();
-        else if (act === 'library') switchView('library');
-        else if (act === 'export') exportAll();
-        else if (act === 'reset') resetReviews();
-      });
-    });
-  }
-
   function screenCardHtml(item) {
     const rarity = item.rarity || 'R';
     const payload = item.payload || {};
@@ -867,7 +800,7 @@
     }).join('');
 
     const metaChips = [
-      item.years ? `${Number(item.years).toFixed(1)} 年经验` : '经验未知',
+      item.years ? `${Number(item.years).toFixed(1)} 年经验` : '年限未识别',
       item.degree || '学历未知',
       item.school ? `${item.school}${item.school_tier_label ? ' · ' + item.school_tier_label : ''}` : '',
       item.major || '',
@@ -911,7 +844,7 @@
 
     const aiUsed = (payload.score_source === 'ai');
     const aiBadge = aiUsed
-      ? `<span class="ai-badge" title="评分与优缺点由 AI 生成">AI 复核</span>`
+      ? `<span class="ai-badge" title="评分与优缺点由 AI 生成">AI 评估</span>`
       : '';
 
     return `
@@ -928,7 +861,11 @@
           <div class="screen-name-row">
             <span class="screen-name">${escapeHtml(item.name)}</span>
             <span class="screen-sub">${escapeHtml(roleLabel)}</span>
-            <span style="margin-left:auto;font-size:22px;font-weight:700">${fmtScore(item.overall_score)}<span style="font-size:12px;color:var(--text-3);font-weight:500"> 分</span></span>
+            <span style="margin-left:auto;font-size:22px;font-weight:700">${
+              item.eval_status === 'done'
+                ? `${fmtScore(item.overall_score)}<span style="font-size:12px;color:var(--text-3);font-weight:500"> 分</span>`
+                : `<span class="pending-score">${item.eval_status === 'error' ? '评估失败' : '待评估'}</span>`
+            }</span>
           </div>
           <div class="screen-meta-list">${metaChips}</div>
           ${contactHtml}
@@ -997,8 +934,8 @@
       const result = await call('review_candidate', item.id, verdict, '');
       applyPayload(result);
       // 标记当前项已评价，队列自然前进
-      state.queue = state.queue.filter((row) => row.id !== item.id);
-      state.queueIndex = Math.min(state.queueIndex, Math.max(0, state.queue.length - 1));
+      state.reviewQueue = state.reviewQueue.filter((row) => row.id !== item.id);
+      state.queueIndex = Math.min(state.queueIndex, Math.max(0, state.reviewQueue.length - 1));
       state.current = null;
       renderChrome();
       setTimeout(() => renderScreen(), state.config.ui.animation ? 180 : 0);
@@ -1010,45 +947,126 @@
     }
   }
 
-  async function runAiReview(candidateId) {
+  // ============ 评估队列 ============
+
+  async function startQueue() {
+    if (!state.aiStatus) {
+      await refreshAiStatus();
+    }
     if (!state.aiStatus || !state.aiStatus.ready) {
-      toast('请先在设置页填写 API Key 并启用 AI 复核', 'warn');
+      toast(state.aiStatus && state.aiStatus.reason
+        ? state.aiStatus.reason : '请先在设置页配置 AI', 'warn');
+      switchView('settings');
       return;
     }
-    const stage = $('screenStage');
-    stage.style.opacity = '0.55';
-    $('aiToggleHint').textContent = 'AI 复核中…';
     try {
-      const result = await call('ai_review_candidate', candidateId);
-      applyPayload(result);
-
-      // 用返回的完整记录替换队列与当前项，保证卡片显示 AI 结果
-      const fresh = result.candidate;
-      if (fresh) {
-        const idx = state.queue.findIndex((c) => c.id === candidateId);
-        const listItem = state.candidates.find((c) => c.id === candidateId);
-        if (idx >= 0 && listItem) state.queue[idx] = listItem;
-        state.current = listItem || state.current;
-      }
-      state.aiReviewRequested = true;
-      renderChrome();
-      renderScreen();
-
-      // renderScreen 会重置开关勾选状态，这里显式恢复
-      const box = $('optAiReview');
-      if (box && !box.disabled) box.checked = true;
-
-      toast(result.applied ? 'AI 复核完成，已用 AI 结果替换评分与优缺点' : 'AI 复核完成（仅作参考）',
-            'success');
+      const result = await call('queue_start');
+      applyQueue(result);
+      toast('已开始 AI 评估', 'success');
     } catch (err) {
       toast(err.message, 'error');
-      state.aiReviewRequested = false;
-      const box = $('optAiReview');
-      if (box) box.checked = false;
-      renderScreen();
-    } finally {
-      stage.style.opacity = '';
     }
+  }
+
+  async function pauseQueue() {
+    try {
+      const result = await call('queue_pause');
+      applyQueue(result);
+      toast('已暂停，当前这份完成后停下', 'info');
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  }
+
+  async function retryFailed() {
+    try {
+      const result = await call('queue_retry_failed');
+      applyPayload(result);
+      applyQueue(result);
+      toast('失败的简历已重新排队', 'success');
+      if (state.aiStatus && state.aiStatus.ready) {
+        await call('queue_start');
+      }
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  }
+
+  async function requeueAll() {
+    const ok = await confirmDialog(
+      '全部重新评估',
+      '将把所有简历标记为待评估（含已评估的），下一轮队列会用当前岗位与规则重新问 AI。'
+    );
+    if (!ok) return;
+    try {
+      const result = await call('queue_requeue_all');
+      applyPayload(result);
+      applyQueue(result);
+      toast('已全部重新排队，点「开始评估」执行', 'success');
+    } catch (err) {
+      toast(err.message, 'error');
+    }
+  }
+
+  function applyQueue(result) {
+    if (result.queue) state.queue = result.queue;
+    if (result.eval) state.eval = result.eval;
+    renderQueueBar();
+    renderChrome();
+  }
+
+  /** 队列状态栏 */
+  function renderQueueBar() {
+    const bar = $('queueBar');
+    if (!bar) return;
+    const q = state.queue || {};
+    const ev = state.eval || {};
+    const aiReady = !!(state.aiStatus && state.aiStatus.ready);
+
+    const stateText = $('queueStateText');
+    const dot = $('queueDot');
+    const detail = $('queueDetail');
+    const progressWrap = $('queueProgress');
+    const fill = $('queueProgressFill');
+
+    dot.className = 'queue-dot';
+    if (!aiReady) {
+      stateText.textContent = 'AI 未配置';
+      detail.textContent = '请到设置页填写 API Key 后才能评估';
+      dot.classList.add('off');
+    } else if (q.state === 'running') {
+      stateText.textContent = '正在评估';
+      detail.textContent = q.current
+        ? `正在处理：${q.current.name}` : '准备中…';
+      dot.classList.add('on');
+    } else if (q.state === 'paused') {
+      stateText.textContent = '已暂停';
+      detail.textContent = `剩余 ${ev.pending || 0} 份待评估`;
+      dot.classList.add('paused');
+    } else {
+      stateText.textContent = '未开始';
+      detail.textContent = (ev.pending || 0) > 0
+        ? `有 ${ev.pending} 份等待评估` : '全部已评估';
+      dot.classList.add('off');
+    }
+
+    const total = ev.total || 0;
+    const done = ev.done || 0;
+    if (progressWrap && fill) {
+      if (total > 0) {
+        progressWrap.classList.remove('hidden');
+        fill.style.width = Math.round((done / total) * 100) + '%';
+      } else {
+        progressWrap.classList.add('hidden');
+      }
+    }
+
+    const startBtn = $('btnQueueStart');
+    const pauseBtn = $('btnQueuePause');
+    const retryBtn = $('btnQueueRetry');
+    if (startBtn) startBtn.disabled = !aiReady || q.state === 'running';
+    if (pauseBtn) pauseBtn.disabled = q.state !== 'running';
+    if (retryBtn) retryBtn.disabled = !(ev.error > 0);
   }
 
   async function testAiConnection() {
@@ -1086,8 +1104,8 @@
       base_url: $('aiBaseUrl').value.trim() || 'https://api.openai.com/v1',
       api_key: $('aiApiKey').value.trim(),
       model: $('aiModel').value.trim() || 'gpt-4o-mini',
-      timeout: Number($('aiTimeout').value) || 60,
-      replace_rules: $('optAiReplace').checked,
+      timeout: Number($('aiTimeout').value) || 90,
+      auto_start: $('optAiAutoStart').checked,
     };
     const result = await call('save_config', { ...state.config, llm });
     state.config = result.config;
@@ -1097,7 +1115,7 @@
     $('aiApiKey').value = saved.api_key || '';
     $('aiModel').value = saved.model || '';
     $('optAiEnabled').checked = !!saved.enabled;
-    $('optAiReplace').checked = saved.replace_rules !== false;
+    $('optAiAutoStart').checked = saved.auto_start !== false;
     return result;
   }
 
@@ -1105,7 +1123,10 @@
     try {
       const result = await call('ai_status');
       state.aiStatus = result;
+      if (result.queue) state.queue = result.queue;
+      if (result.eval) state.eval = result.eval;
       updateAiSidebar();
+      renderQueueBar();
       if (state.view === 'screen') renderScreen();
     } catch (err) { /* 忽略 */ }
   }
@@ -1117,91 +1138,6 @@
     dot.className = 'side-avatar ' + (ready ? 'green' : 'gray');
     dot.textContent = ready ? '●' : '○';
     text.textContent = ready ? '已启用' : '未启用';
-  }
-
-  async function batchAiReview(onlyUnreviewed) {
-    if (!state.aiStatus || !state.aiStatus.ready) {
-      toast('请先在设置页填写 API Key 并启用 AI 复核', 'warn');
-      return;
-    }
-    const total = state.candidates.length;
-    if (!total) {
-      toast('还没有简历', 'warn');
-      return;
-    }
-
-    const scope = onlyUnreviewed ? '尚未 AI 复核的简历' : '全部简历';
-    const ok = await confirmDialog(
-      '批量 AI 复核',
-      `将对${scope}逐份调用 AI（共最多 ${total} 份，顺序执行）。` +
-      '这会消耗相应接口额度，耗时取决于简历数量与接口速度。'
-    );
-    if (!ok) return;
-
-    showAiProgress(0, total, '准备中…');
-    const btns = ['btnAiBatchAll', 'btnAiBatchPending', 'btnAiRevert'];
-    btns.forEach((id) => { const b = $(id); if (b) b.disabled = true; });
-
-    window.__aiProgress = (payload) => {
-      showAiProgress(payload.index || 0, payload.total || total, payload.name || '');
-    };
-
-    try {
-      const result = await call('ai_batch_review', null, 0, onlyUnreviewed);
-      applyPayload(result);
-      buildQueue();
-      renderAll();
-      hideAiProgress();
-
-      const failed = result.failed || [];
-      toast(`AI 复核完成 ${result.updated}/${result.total} 份` +
-            (failed.length ? `，失败 ${failed.length} 份` : ''),
-            failed.length ? 'warn' : 'success');
-      failed.slice(0, 5).forEach((f) => toast(`${f.name}：${f.error}`, 'error'));
-    } catch (err) {
-      hideAiProgress();
-      toast(err.message, 'error');
-    } finally {
-      btns.forEach((id) => { const b = $(id); if (b) b.disabled = false; });
-      window.__aiProgress = null;
-    }
-  }
-
-  function showAiProgress(done, total, name) {
-    const overlay = $('aiProgressOverlay');
-    overlay.classList.remove('hidden');
-    const percent = total ? Math.round((done / total) * 100) : 0;
-    $('aiProgressFill').style.width = percent + '%';
-    $('aiProgressText').textContent = `${done} / ${total}`;
-    $('aiProgressName').textContent = name || '';
-  }
-
-  function hideAiProgress() {
-    $('aiProgressOverlay').classList.add('hidden');
-  }
-
-  async function revertAiReview() {
-    const aiCount = state.candidates.filter(
-      (c) => (c.payload || {}).score_source === 'ai').length;
-    if (!aiCount) {
-      toast('当前没有 AI 复核过的简历', 'warn');
-      return;
-    }
-    const ok = await confirmDialog(
-      '撤销 AI 复核',
-      `将把 ${aiCount} 份简历恢复为规则引擎评分（需要已保存原文），AI 意见会被清除。`
-    );
-    if (!ok) return;
-    try {
-      const result = await call('ai_clear_review', null);
-      applyPayload(result);
-      buildQueue();
-      renderAll();
-      toast(`已恢复 ${result.restored} 份${result.skipped ? `，跳过 ${result.skipped} 份（无原文）` : ''}`,
-            'success');
-    } catch (err) {
-      toast(err.message, 'error');
-    }
   }
 
   async function resetReviews() {
@@ -1248,6 +1184,9 @@
       if (state.sortBy === 'name') return a.name.localeCompare(b.name, 'zh') * dir;
       if (state.sortBy === 'years') return ((a.years || 0) - (b.years || 0)) * dir;
       if (state.sortBy === 'created') return String(a.created_at).localeCompare(String(b.created_at)) * dir;
+      const aDone = a.eval_status === 'done' ? 1 : 0;
+      const bDone = b.eval_status === 'done' ? 1 : 0;
+      if (aDone !== bDone) return (aDone - bDone) * dir;
       return ((a.overall_score - b.overall_score) || (a.id - b.id)) * dir;
     });
     return list;
@@ -1315,15 +1254,19 @@
     const tags = (item.skill_hits || []).slice(0, 4)
       .map((h) => `<span class="chip">${escapeHtml(h.term || h.name)}</span>`).join('');
     const selected = state.selected.has(item.id);
+    const evaluated = item.eval_status === 'done';
+    const failed = item.eval_status === 'error';
 
     return `
-      <div class="person-card ${selected ? 'selected' : ''}" data-id="${item.id}">
+      <div class="person-card ${selected ? 'selected' : ''} ${evaluated ? '' : 'pending'}" data-id="${item.id}">
         <div class="person-avatar ${rarity}">${escapeHtml(initial(item.name))}</div>
         <div class="person-main">
           <div class="person-top">
             <span class="person-name">${escapeHtml(item.name)}</span>
-            <span class="rarity-badge ${rarity}">${item.rarity}</span>
-            ${(item.payload && item.payload.score_source === 'ai') ? '<span class="ai-badge">AI</span>' : ''}
+            ${evaluated ? `<span class="rarity-badge ${rarity}">${item.rarity}</span>` : ''}
+            ${evaluated && item.payload && item.payload.score_source === 'ai' ? '<span class="ai-badge">AI</span>' : ''}
+            ${!evaluated && !failed ? '<span class="status-badge flagged">待评估</span>' : ''}
+            ${failed ? `<span class="eval-error-badge" title="${escapeHtml(item.eval_error || '')}">评估失败</span>` : ''}
             ${verdictChip}
           </div>
           <div class="person-role">
@@ -1336,7 +1279,9 @@
           <div class="person-tags">${tags}</div>
         </div>
         <div class="person-right">
-          <span class="person-score ${rarity}">${fmtScore(item.overall_score)}</span>
+          <span class="person-score ${rarity} ${evaluated ? '' : 'pending-score'}">${
+            evaluated ? fmtScore(item.overall_score) : (failed ? '!' : '—')
+          }</span>
           <span class="person-time">${escapeHtml((item.created_at || '').slice(5, 16).replace('T', ' '))}</span>
         </div>
       </div>`;
@@ -1787,24 +1732,6 @@
     $('srVal').textContent = cfg.rarity.sr;
     updateThresholdPreview();
 
-    const weightLabels = {
-      skill: '技能匹配', experience: '经验年限', education: '教育背景',
-      project: '项目经历', keyword: '关键词命中', job_match: '岗位匹配',
-    };
-    $('weightFields').innerHTML = Object.keys(weightLabels).map((key) => {
-      const value = Math.round((cfg.scoring.weights[key] || 0) * 100);
-      return `<label class="field">
-        <span>${weightLabels[key]} <b id="w-${key}-val">${value}</b>%</span>
-        <input type="range" class="weight-range" data-weight="${key}" min="0" max="50" step="1" value="${value}">
-      </label>`;
-    }).join('');
-    $$('.weight-range').forEach((input) => {
-      input.addEventListener('input', () => {
-        $(`w-${input.dataset.weight}-val`).textContent = input.value;
-        paintRange(input);
-      });
-    });
-
     const roleSelect = $('roleSelect');
     roleSelect.innerHTML = '<option value="">未选择（无法开始速筛）</option>' +
       (state.roles || []).filter((r) => r.key !== 'general')
@@ -1841,13 +1768,14 @@
     $('aiBaseUrl').value = llm.base_url || 'https://api.openai.com/v1';
     $('aiApiKey').value = llm.api_key || '';
     $('aiModel').value = llm.model || 'gpt-4o-mini';
-    $('aiTimeout').value = llm.timeout || 60;
-    $('optAiReplace').checked = llm.replace_rules !== false;
+    $('aiTimeout').value = llm.timeout || 90;
+    $('optAiAutoStart').checked = llm.auto_start !== false;
 
     updateSoundButton();
     renderApiBox();
     paintAllRanges();
     updateAiSidebar();
+    renderQueueBar();
   }
 
   function updateThresholdPreview() {
@@ -1868,14 +1796,9 @@
   }
 
   function collectSettings() {
-    const weights = {};
-    $$('.weight-range').forEach((input) => {
-      weights[input.dataset.weight] = Number(input.value) / 100;
-    });
     const splitList = (value) => value.split(/[,，、]/).map((s) => s.trim()).filter(Boolean);
 
     return {
-      scoring: { weights },
       rarity: {
         ssr: Number($('ssrRange').value),
         sr: Number($('srRange').value),
@@ -1904,8 +1827,8 @@
         api_key: $('aiApiKey').value.trim(),
         model: $('aiModel').value.trim() || 'gpt-4o-mini',
         temperature: (state.config.llm && state.config.llm.temperature) || 0.2,
-        timeout: Number($('aiTimeout').value) || 60,
-        replace_rules: $('optAiReplace').checked,
+        timeout: Number($('aiTimeout').value) || 90,
+        auto_start: $('optAiAutoStart').checked,
       },
       api: {
         enabled: $('optApiAuto').checked,
@@ -2161,6 +2084,24 @@
       refreshAiStatus();
     }).catch(() => {});
   };
+  // 后端队列状态推送
+  window.__queueUpdate = function (snapshot) {
+    state.queue = snapshot;
+    if (snapshot && snapshot.eval) state.eval = snapshot.eval;
+    renderQueueBar();
+    // 队列空闲下来时刷新一次列表（拿到最新分数）
+    if (snapshot && snapshot.state === 'idle') {
+      call('queue_status').then((d) => {
+        applyPayload(d);
+        buildQueue();
+        renderAll();
+      }).catch(() => {});
+    } else if (snapshot && snapshot.finished > 0) {
+      // 过程中轻量刷新计数
+      renderChrome();
+    }
+  };
+
   window.__errors = [];
   window.addEventListener('error', (event) => {
     window.__errors.push(String(event.message || event.error || 'unknown'));

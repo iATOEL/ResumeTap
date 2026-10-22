@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -12,9 +13,10 @@ from typing import Optional
 import httpx
 import webview
 
-from . import ai_review, api, config as config_module
-from . import scoring
+from . import ai_engine, api, config as config_module
+from . import eval_queue
 from . import paths, services, storage
+from .eval_queue import QUEUE
 from .rules import ROLE_GROUPS, ROLE_LABELS
 
 log = logging.getLogger("resume_gacha")
@@ -31,6 +33,24 @@ class Bridge:
 
     def attach(self, window: webview.Window) -> None:
         self._window = window
+        # 队列状态变化时把快照推给前端
+        QUEUE.set_listener(self._on_queue_update)
+        self._last_queue_emit = 0.0
+
+    def _on_queue_update(self, snapshot: dict) -> None:
+        if not self._window:
+            return
+        # 每份结束都刷新，但限制频率避免刷爆 UI
+        now = time.time()
+        state = snapshot.get("state")
+        if state == eval_queue.RUNNING and now - self._last_queue_emit < 0.35:
+            return
+        self._last_queue_emit = now
+        try:
+            self._window.evaluate_js(
+                "window.__queueUpdate && window.__queueUpdate(" + _to_js(snapshot) + ")")
+        except Exception:  # noqa: BLE001
+            pass
 
     def _ok(self, **data) -> dict:
         return {"ok": True, **data}
@@ -65,6 +85,8 @@ class Bridge:
                     "has_candidates": len(candidates) > 0,
                 },
                 review=storage.review_summary(),
+                eval=storage.eval_summary(),
+                queue=QUEUE.snapshot(),
                 candidates=candidates,
             )
         except Exception as exc:  # noqa: BLE001
@@ -74,7 +96,7 @@ class Bridge:
     # ---------- 速筛 ----------
 
     def next_candidate(self, skip_reviewed: bool = True) -> dict:
-        """取下一份待评价简历（按综合分从高到低）。"""
+        """取下一份待评价简历（已评估的按分数排序，未评估的排后面）。"""
         try:
             pool = storage.list_pending() if skip_reviewed else storage.list_candidates()
             if not pool:
@@ -142,195 +164,117 @@ class Bridge:
         except Exception as exc:  # noqa: BLE001
             return self._err(f"重置令牌失败：{exc}")
 
-    # ---------- AI 复核（可选，用户自备接口） ----------
+    # ---------- AI 评估（纯 AI 驱动） ----------
 
     def ai_status(self) -> dict:
         try:
             cfg = self._config()
             llm = cfg.get("llm", {})
             return self._ok(
-                ready=ai_review.is_ready(cfg),
+                ready=ai_engine.is_ready(cfg),
                 enabled=bool(llm.get("enabled")),
                 has_key=bool(str(llm.get("api_key") or "").strip()),
                 model=llm.get("model", ""),
                 base_url=llm.get("base_url", ""),
-                replace_rules=bool(llm.get("replace_rules", True)),
+                reason="" if ai_engine.is_ready(cfg) else ai_engine.readiness_error(cfg),
+                queue=QUEUE.snapshot(),
+                eval=storage.eval_summary(),
             )
         except Exception as exc:  # noqa: BLE001
             return self._err(f"读取 AI 状态失败：{exc}")
 
-    def ai_review_candidate(self, candidate_id: int) -> dict:
-        """对单份简历执行 AI 复核；成功后可选择替换规则引擎结果。"""
+    def ai_test_connection(self) -> dict:
         try:
             cfg = self._config()
-            if not ai_review.is_ready(cfg):
-                return self._err("AI 复核未启用，请先在设置页填写 API Key 并开启")
-
-            data = storage.get_candidate(int(candidate_id), include_raw=True)
-            if not data:
-                return self._err("简历不存在或已被删除")
-
-            raw_text = data.get("raw_text") or ""
-            if not raw_text.strip():
-                return self._err("该简历未保存原文，无法进行 AI 复核")
-
-            payload = data.get("payload") or {}
-            role_label = payload.get("detected_role_label") or "未指定"
-
-            try:
-                ai_result = ai_review.review_resume(raw_text, role_label, cfg)
-            except httpx.HTTPStatusError as exc:
-                status = exc.response.status_code
-                if status in {401, 403}:
-                    return self._err("API Key 无效或没有权限，请检查设置")
-                if status == 429:
-                    return self._err("请求过于频繁或额度不足，请稍后重试")
-                return self._err(f"AI 接口返回错误（HTTP {status}）")
-            except httpx.TimeoutException:
-                return self._err("AI 接口超时，请检查网络或调大超时时间")
-            except Exception as exc:  # noqa: BLE001
-                log.exception("AI 复核失败")
-                return self._err(f"AI 复核失败：{exc}")
-
-            # 权重按当前配置重新计算一次（避免切换岗位后沿用旧权重）
-            fresh = scoring.evaluate(raw_text, payload.get("filename") or data.get("filename", ""), cfg)
-            weights = {d["key"]: d.get("weight", 0.0) for d in fresh.get("dimensions", [])}
-            merged = ai_review.apply_to_payload(payload, ai_result, cfg, weights)
-            merged["filename"] = payload.get("filename") or data.get("filename", "")
-
-            storage.update_candidate(int(candidate_id), merged)
-            updated = storage.get_candidate(int(candidate_id), include_raw=True)
+            result = ai_engine.test_connection(cfg)
             return self._ok(
-                candidate=updated,
-                applied=merged.get("score_source") == "ai",
-                ai=ai_result,
-                candidates=storage.list_candidates(),
-                stats=services.statistics(),
-                review=storage.review_summary(),
+                message=(f"连接正常，模型可用（测试简历评分 {result['overall_score']}）"),
             )
         except Exception as exc:  # noqa: BLE001
-            log.exception("AI 复核处理失败")
-            return self._err(f"AI 复核失败：{exc}")
+            return self._err(f"连接失败：{_humanize_ai_error(exc)}")
 
-    def ai_batch_review(self, candidate_ids: list[int] | None = None,
-                        limit: int = 0, only_unreviewed: bool = False) -> dict:
-        """批量 AI 复核。
-
-        limit=0 表示不限制数量（复核全部候选）；only_unreviewed=True 时
-        只处理还没被 AI 复核过的简历。
-        进度通过 window.__aiProgress 回调推给前端。
-        """
+    def queue_start(self) -> dict:
+        """开始评估队列。未配置 AI 时拒绝。"""
         try:
             cfg = self._config()
-            if not ai_review.is_ready(cfg):
-                return self._err("AI 复核未启用，请先在设置页填写 API Key 并开启")
-
-            ids = {int(i) for i in candidate_ids} if candidate_ids else None
-            targets = []
-            for item in storage.list_candidates():
-                if ids is not None and item["id"] not in ids:
-                    continue
-                if only_unreviewed:
-                    payload = item.get("payload") or {}
-                    if payload.get("score_source") == "ai":
-                        continue
-                detail = storage.get_candidate(item["id"], include_raw=True)
-                if detail and (detail.get("raw_text") or "").strip():
-                    targets.append(detail)
-
-            if limit and limit > 0:
-                targets = targets[:limit]
-
-            if not targets:
-                return self._err("没有需要复核的简历（需要已保存原文）")
-
-            total = len(targets)
-            done, failed = 0, []
-            for index, detail in enumerate(targets, start=1):
-                payload = detail.get("payload") or {}
-                role_label_text = payload.get("detected_role_label") or "未指定"
-                self._ai_progress({
-                    "index": index, "total": total,
-                    "name": detail.get("name") or "",
-                    "stage": "reviewing",
-                })
-                try:
-                    ai_result = ai_review.review_resume(
-                        detail["raw_text"], role_label_text, cfg)
-                    weights = {d["key"]: d.get("weight", 0.0)
-                               for d in payload.get("dimensions", [])}
-                    merged = ai_review.apply_to_payload(payload, ai_result, cfg, weights)
-                    merged["filename"] = payload.get("filename") or detail.get("filename", "")
-                    storage.update_candidate(detail["id"], merged)
-                    done += 1
-                except Exception as exc:  # noqa: BLE001
-                    failed.append({"id": detail["id"], "name": detail.get("name"),
-                                   "error": str(exc)[:160]})
-
-            self._ai_progress({"index": total, "total": total, "stage": "done"})
-            return self._ok(
-                updated=done,
-                failed=failed,
-                total=total,
-                candidates=storage.list_candidates(),
-                stats=services.statistics(),
-            )
+            if not ai_engine.is_ready(cfg):
+                return self._err(ai_engine.readiness_error(cfg))
+            QUEUE.start()
+            return self._ok(queue=QUEUE.snapshot(), eval=storage.eval_summary())
         except Exception as exc:  # noqa: BLE001
-            log.exception("批量复核失败")
-            return self._err(f"批量复核失败：{exc}")
+            return self._err(f"启动失败：{exc}")
 
-    def _ai_progress(self, payload: dict) -> None:
-        if not self._window:
-            return
+    def queue_pause(self) -> dict:
         try:
-            self._window.evaluate_js(
-                "window.__aiProgress && window.__aiProgress(" + _to_js(payload) + ")")
-        except Exception:  # noqa: BLE001
-            pass
+            QUEUE.pause()
+            return self._ok(queue=QUEUE.snapshot(), eval=storage.eval_summary())
+        except Exception as exc:  # noqa: BLE001
+            return self._err(f"暂停失败：{exc}")
 
-    def ai_clear_review(self, candidate_ids: list[int] | None = None) -> dict:
-        """撤销 AI 复核，恢复规则引擎评分。"""
+    def queue_status(self) -> dict:
         try:
-            cfg = self._config()
-            targets = storage.list_candidates()
-            if candidate_ids:
-                wanted = {int(i) for i in candidate_ids}
-                targets = [c for c in targets if c["id"] in wanted]
-
-            restored = 0
-            skipped = 0
-            for item in targets:
-                detail = storage.get_candidate(item["id"], include_raw=True)
-                if not detail:
-                    continue
-                raw_text = detail.get("raw_text") or ""
-                if not raw_text.strip():
-                    skipped += 1
-                    continue
-                try:
-                    payload = scoring.evaluate(raw_text, detail.get("filename", ""), cfg)
-                    storage.update_candidate(item["id"], payload)
-                    restored += 1
-                except Exception:  # noqa: BLE001
-                    skipped += 1
-
-            return self._ok(restored=restored, skipped=skipped,
+            return self._ok(queue=QUEUE.snapshot(), eval=storage.eval_summary(),
                             candidates=storage.list_candidates(),
                             stats=services.statistics())
         except Exception as exc:  # noqa: BLE001
-            return self._err(f"撤销失败：{exc}")
+            return self._err(f"读取队列状态失败：{exc}")
 
-    def ai_test_connection(self) -> dict:
-        """用一条极短请求验证 Key 与地址是否可用。"""
+    def queue_retry_failed(self) -> dict:
+        """把评估失败的简历重新排队。"""
+        try:
+            result = services.requeue_all(self._config(), only_failed=True)
+            if QUEUE.state == eval_queue.RUNNING:
+                QUEUE.kick()
+            return self._ok(**result, queue=QUEUE.snapshot(),
+                            eval=storage.eval_summary(),
+                            candidates=storage.list_candidates())
+        except Exception as exc:  # noqa: BLE001
+            return self._err(f"重试失败：{exc}")
+
+    def queue_requeue_all(self) -> dict:
+        """把所有简历重新排队（改岗位/改规则后用）。"""
+        try:
+            result = services.requeue_all(self._config(), only_failed=False)
+            return self._ok(**result, queue=QUEUE.snapshot(),
+                            eval=storage.eval_summary(),
+                            candidates=storage.list_candidates())
+        except Exception as exc:  # noqa: BLE001
+            return self._err(f"重新排队失败：{exc}")
+
+    def ai_evaluate_one(self, candidate_id: int) -> dict:
+        """立即评估指定的一份（不经过队列，用于详情页重试）。"""
         try:
             cfg = self._config()
-            if not ai_review.is_ready(cfg):
-                return self._err("请先填写 API Key 并开启 AI 复核")
-            probe = "姓名：测试\n技能：Python\n工作经历：1 年开发经验"
-            result = ai_review.review_resume(probe, "测试", cfg)
-            return self._ok(message=f"连接正常，模型返回综合分 {result['overall_score']}")
+            if not ai_engine.is_ready(cfg):
+                return self._err(ai_engine.readiness_error(cfg))
+
+            detail = storage.get_candidate(int(candidate_id), include_raw=True)
+            if not detail:
+                return self._err("简历不存在或已被删除")
+            raw_text = detail.get("raw_text") or ""
+            if not raw_text.strip():
+                return self._err("该简历未保存原文，无法评估")
+
+            try:
+                result = ai_engine.evaluate(raw_text, cfg)
+            except Exception as exc:  # noqa: BLE001
+                message = _humanize_ai_error(exc)
+                storage.set_eval_status(int(candidate_id), "error", message)
+                return self._err(message)
+
+            payload = eval_queue._compose_payload(int(candidate_id), detail, result)
+            storage.update_candidate(int(candidate_id), payload)
+            storage.set_eval_status(int(candidate_id), "done", "")
+
+            return self._ok(
+                candidate=storage.get_candidate(int(candidate_id), include_raw=True),
+                candidates=storage.list_candidates(),
+                stats=services.statistics(),
+                eval=storage.eval_summary(),
+            )
         except Exception as exc:  # noqa: BLE001
-            return self._err(f"连接失败：{exc}")
+            log.exception("单份评估失败")
+            return self._err(f"评估失败：{exc}")
 
     def get_candidate_detail(self, candidate_id: int) -> dict:
         try:
@@ -411,12 +355,24 @@ class Bridge:
                 log.exception("批量导入失败")
                 return self._err(f"导入失败：{exc}")
 
-        for item in result["imported"]:
-            services.record_pull(item["rarity"], cfg)
         result["stats"] = services.statistics()
         result["achievements"] = services.global_stats()
         result["candidates"] = storage.list_candidates()
         result["review"] = storage.review_summary()
+        result["eval"] = storage.eval_summary()
+        result["queue"] = QUEUE.snapshot()
+
+        # 若用户已开启"自动开始"，导入后立即唤醒队列
+        try:
+            if cfg.get("llm", {}).get("auto_start", True) and ai_engine.is_ready(cfg):
+                if QUEUE.state == eval_queue.RUNNING:
+                    QUEUE.kick()
+                elif QUEUE.state == eval_queue.IDLE:
+                    QUEUE.start()
+                    result["queue"] = QUEUE.snapshot()
+        except Exception:  # noqa: BLE001
+            log.exception("自动启动队列失败")
+
         return self._ok(**result)
 
     def _progress(self, payload: dict) -> None:
@@ -543,13 +499,20 @@ class Bridge:
     # ---------- 配置 ----------
 
     def save_config(self, new_config: dict) -> dict:
+        """保存配置。
+
+        纯 AI 模式下不做本地重算；切换岗位时只同步列表上的岗位标签，
+        已有分数保留，需要按新岗位重评时用户可点「全部重新评估」。
+        """
         try:
             with self._lock:
                 saved = config_module.save_config(new_config)
-                rescored = services.rescore_all(saved)
-            return self._ok(config=saved, rescored=rescored,
+                touched = services.sync_role_labels(saved)
+            return self._ok(config=saved, touched=touched,
                             candidates=storage.list_candidates(),
-                            stats=services.statistics())
+                            stats=services.statistics(),
+                            eval=storage.eval_summary(),
+                            queue=QUEUE.snapshot())
         except Exception as exc:  # noqa: BLE001
             log.exception("保存配置失败")
             return self._err(f"保存配置失败：{exc}")
@@ -558,10 +521,12 @@ class Bridge:
         try:
             with self._lock:
                 cfg = config_module.reset_config()
-                rescored = services.rescore_all(cfg)
-            return self._ok(config=cfg, rescored=rescored,
+                touched = services.sync_role_labels(cfg)
+            return self._ok(config=cfg, touched=touched,
                             candidates=storage.list_candidates(),
-                            stats=services.statistics())
+                            stats=services.statistics(),
+                            eval=storage.eval_summary(),
+                            queue=QUEUE.snapshot())
         except Exception as exc:  # noqa: BLE001
             return self._err(f"恢复默认失败：{exc}")
 
@@ -642,3 +607,20 @@ class Bridge:
 def _to_js(value) -> str:
     import json
     return json.dumps(value, ensure_ascii=False)
+
+
+def _humanize_ai_error(exc: Exception) -> str:
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        if status in (401, 403):
+            return "API Key 无效或没有权限"
+        if status == 429:
+            return "接口限流或额度不足，请稍后重试"
+        if status >= 500:
+            return f"AI 服务端错误（HTTP {status}）"
+        return f"AI 接口返回错误（HTTP {status}）"
+    if isinstance(exc, httpx.TimeoutException):
+        return "AI 接口超时，请检查网络或调大超时时间"
+    if isinstance(exc, httpx.RequestError):
+        return "无法连接 AI 接口，请检查地址是否正确"
+    return str(exc)[:200] or "未知错误"

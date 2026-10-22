@@ -93,7 +93,9 @@ def _candidate_brief(item: dict, include_sections: bool = False) -> dict:
         "contact": payload.get("contact", {}),
         "education_entries": (payload.get("profile") or {}).get("education_entries", []),
         "score_source": payload.get("score_source", "rules"),
-        "ai_review": payload.get("ai_review", {}),
+        "ai_model": payload.get("ai_model", ""),
+        "eval_status": item.get("eval_status", "pending"),
+        "eval_error": item.get("eval_error", ""),
         "created_at": item.get("created_at", ""),
     }
     if include_sections:

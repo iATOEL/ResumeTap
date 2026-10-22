@@ -1,14 +1,13 @@
-"""结构化抽取：把简历纯文本解析为可评分的字段。"""
+"""结构化抽取：从简历纯文本提取展示信息（姓名、联系方式、教育、项目、年限）。
+
+不参与评分——评分完全由 AI 引擎负责。
+"""
 
 import re
 from dataclasses import dataclass, field
 from datetime import date
 
-from .rules import (
-    PROJECT_VERBS,
-    SECTION_ALIASES,
-    SKILL_CATALOG,
-)
+from .rules import SECTION_ALIASES
 from .schools import find_school
 
 DEGREE_LEVELS = {
@@ -64,43 +63,6 @@ GENDER_RE = re.compile(r"(?:性\s*别\s*[:：]\s*)?(男|女)(?![性生])")
 AGE_RE = re.compile(r"(?:年\s*龄\s*[:：]\s*)?(\d{2})\s*岁")
 GRAD_RE = re.compile(r"(19|20)\d{2}\s*[年./\-]?\s*(?:0?[1-9]|1[0-2])?\s*月?\s*(?:毕业|届)")
 
-SENIOR_TITLES = ["架构师", "技术专家", "资深", "高级", "senior", "staff", "principal", "lead", "负责人", "主管"]
-MANAGEMENT_TITLES = ["技术经理", "项目经理", "团队负责人", "研发经理", "总监", "cto", "leader", "组长", "team lead"]
-
-METRIC_RE = re.compile(
-    r"(\d+(?:\.\d+)?)\s*(%|％|万|亿|w|k|qps|tps|ms|人|倍|条|次/秒)", re.IGNORECASE
-)
-SCALE_WORDS = ["千万级", "百万级", "十万级", "亿级", "高并发", "大规模", "海量", "亿级流量"]
-
-CATEGORY_LABELS = {name: cat for cat, entries in SKILL_CATALOG.items() for name in entries}
-
-# 别名 -> 规范名（长别名优先，避免 "c" 命中 "c++" 之类的误判）
-ALIAS_MAP: dict[str, str] = {}
-for _category, _items in SKILL_CATALOG.items():
-    for _canonical, _aliases in _items.items():
-        for _alias in _aliases:
-            ALIAS_MAP.setdefault(_alias.lower(), _canonical)
-        ALIAS_MAP.setdefault(_canonical.lower(), _canonical)
-
-
-@dataclass
-class Hit:
-    """一次关键词命中。"""
-
-    term: str
-    category: str
-    count: int
-    contexts: list[str] = field(default_factory=list)
-
-    def to_dict(self) -> dict:
-        return {
-            "term": self.term,
-            "category": self.category,
-            "count": self.count,
-            "contexts": self.contexts[:3],
-        }
-
-
 @dataclass
 class ProjectItem:
     title: str
@@ -122,10 +84,6 @@ class Extracted:
     major: str = ""
     education_entries: list[dict] = field(default_factory=list)
     role_title: str = ""
-    seniority: bool = False
-    management: bool = False
-    skills: dict[str, Hit] = field(default_factory=dict)          # 规范名 -> Hit
-    extra_terms: dict[str, Hit] = field(default_factory=dict)     # 其他术语命中
     projects: list[ProjectItem] = field(default_factory=list)
     sections: dict[str, str] = field(default_factory=dict)
     education_text: str = ""
@@ -135,9 +93,6 @@ class Extracted:
     skill_text: str = ""
     summary_text: str = ""
     awards_text: str = ""
-
-    def skill_names(self) -> list[str]:
-        return sorted(self.skills.keys())
 
     def to_summary_dict(self) -> dict:
         return {
@@ -152,7 +107,6 @@ class Extracted:
             "major": self.major,
             "education_entries": self.education_entries,
             "role_title": self.role_title,
-            "skills": self.skill_names(),
             "project_count": len(self.projects),
         }
 
@@ -553,74 +507,6 @@ def _split_projects(section_text: str, limit: int = 12) -> list[ProjectItem]:
     return projects
 
 
-def _contexts(text: str, alias: str, limit: int = 3) -> list[str]:
-    results = []
-    pattern = re.compile(re.escape(alias), re.IGNORECASE)
-    for match in pattern.finditer(text):
-        start = max(0, match.start() - 28)
-        end = min(len(text), match.end() + 28)
-        snippet = text[start:end].replace("\n", " ").strip()
-        snippet = re.sub(r"\s+", " ", snippet)
-        if snippet and snippet not in results:
-            results.append(snippet)
-        if len(results) >= limit:
-            break
-    return results
-
-
-def _count_occurrences(text_lower: str, alias: str) -> int:
-    if not alias:
-        return 0
-    if re.fullmatch(r"[a-z0-9+#./\- ]+", alias):
-        pattern = r"(?<![a-z0-9])" + re.escape(alias) + r"(?![a-z0-9])"
-    else:
-        pattern = re.escape(alias)
-    return len(re.findall(pattern, text_lower))
-
-
-def match_skills(text: str) -> dict[str, Hit]:
-    text_lower = text.lower()
-    hits: dict[str, Hit] = {}
-    for canonical, aliases in (
-        (name, aliases) for entries in SKILL_CATALOG.values() for name, aliases in entries.items()
-    ):
-        counts = 0
-        matched_alias = ""
-        for alias in aliases:
-            count = _count_occurrences(text_lower, alias.lower())
-            if count:
-                counts += count
-                matched_alias = matched_alias or alias
-        if counts:
-            contexts = _contexts(text, matched_alias or canonical)
-            hits[canonical] = Hit(
-                term=canonical,
-                category=CATEGORY_LABELS.get(canonical, "其他"),
-                count=min(counts, 20),
-                contexts=contexts,
-            )
-    return hits
-
-
-def match_terms(text: str, terms: list[str]) -> dict[str, Hit]:
-    text_lower = text.lower()
-    hits: dict[str, Hit] = {}
-    for term in terms:
-        term = term.strip()
-        if not term:
-            continue
-        count = _count_occurrences(text_lower, term.lower())
-        if count:
-            canonical = ALIAS_MAP.get(term.lower(), term)
-            hits[canonical] = Hit(
-                term=term,
-                category=CATEGORY_LABELS.get(canonical, "自定义"),
-                count=min(count, 20),
-                contexts=_contexts(text, term),
-            )
-    return hits
-
-
 def extract(text: str, filename: str = "") -> Extracted:
     sections = detect_sections(text)
     result = Extracted(sections=sections)
@@ -666,27 +552,5 @@ def extract(text: str, filename: str = "") -> Extracted:
     result.awards_text = sections.get("awards", "")
 
     result.role_title = _detect_role_title(text)
-    lowered_head = text[:800].lower()
-    result.seniority = any(title in lowered_head for title in SENIOR_TITLES)
-    result.management = any(title in lowered_head for title in MANAGEMENT_TITLES)
-
-    result.skills = match_skills(text)
     result.projects = _split_projects(result.project_text)
     return result
-
-
-def project_metrics(projects: list[ProjectItem]) -> dict:
-    """统计项目数量、强动词、量化指标与规模描述。
-
-    标题行也参与统计：不少简历把成果写在标题里（如「…累计 800 名用户」）。
-    """
-    descriptions = "\n".join(f"{p.title}\n{p.description}" for p in projects)
-    verb_hits = [verb for verb in PROJECT_VERBS if verb in descriptions]
-    metric_hits = METRIC_RE.findall(descriptions)
-    scale_hits = [word for word in SCALE_WORDS if word in descriptions]
-    return {
-        "count": len(projects),
-        "verb_hits": verb_hits,
-        "metric_count": len(metric_hits),
-        "scale_hits": scale_hits,
-    }
