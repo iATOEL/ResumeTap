@@ -111,7 +111,7 @@
 - `tools/release.py` 重写：`git add/commit/push` + `gh release create/upload --clobber`
 - 删除 `tools/push_via_api.py`（REST 逐 blob 上传的历史绕行方案，151 行）
 
-净效果：发布脚本从 285 行降到 190 行，且不再自己实现文件清单与 HTTP 上传；
+净效果：发布脚本从 298 行降到 201 行，且不再自己实现文件清单与 HTTP 上传；
 版本历史回到真正的 git 提交序列。
 
 ---
