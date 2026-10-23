@@ -11,13 +11,13 @@
 ## 目录
 
 - [快速开始](#快速开始)
-- [核心流程：逐份速筛](#核心流程逐份速筛)
-- [本地 AI 审查 API](#本地-ai-审查-api)
-- [评分规则](#评分规则)
+- [核心流程](#核心流程)
+- [对外审查 API](#对外审查-api)
+- [评分方式：完全由 AI 判断](#评分方式完全由-ai-判断)
 - [学历与院校分层](#学历与院校分层)
 - [稀有度阈值](#稀有度阈值)
 - [界面与快捷键](#界面与快捷键)
-- [从源码构建 exe](#从源码构建-exe)
+- [从源码构建便携版](#从源码构建便携版)
 - [目录结构](#目录结构)
 - [常见问题](#常见问题)
 - [隐私说明](#隐私说明)
@@ -30,7 +30,7 @@
 ### 方式一：下载便携版（推荐）
 
 从 [Releases](https://github.com/iATOEL/ResumeTap/releases/latest) 下载
-`ResumeTap-v3.1.1-win64.zip`，解压到任意位置（桌面、U 盘都行），双击 `ResumeTap.exe`。
+`ResumeTap-v3.1.2-win64.zip`，解压到任意位置（桌面、U 盘都行），双击 `ResumeTap.exe`。
 
 解压后的目录结构：
 
@@ -198,7 +198,7 @@ RESUME_GACHA_DEBUG=1 .venv/Scripts/python.exe run_app.py
 
 - 只监听 `127.0.0.1`，不接受外部网络访问
 - 所有接口（除 `/health`）必须携带启动时随机生成的令牌
-- 默认**不返回**简历原文与联系方式
+- 不返回完整简历原文；**会返回联系方式**，需要脱敏请自行处理
 - 令牌可在设置页重置
 
 ### 获取令牌
@@ -242,7 +242,7 @@ curl -H "X-API-Token: $TOKEN" \
 # 3. 回写 AI 审查结论
 curl -X POST -H "X-API-Token: $TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"id":1,"verdict":"liked","note":"AI 复核：技能与岗位高度匹配"}' \
+  -d '{"id":1,"verdict":"liked","note":"AI 审查：技能与岗位高度匹配"}' \
   "http://127.0.0.1:8765/review"
 ```
 
@@ -261,18 +261,19 @@ curl -X POST -H "X-API-Token: $TOKEN" \
   "school": "浙江大学",
   "school_tier_label": "C9",
   "detected_role_label": "后端开发",
-  "news_flash": "整体竞争力强，建议优先沟通。技能栈扎实，命中 19 项…",
-  "strengths": ["技能栈扎实，命中 19 项（微服务、Java、Redis、Kafka）", "…"],
-  "weaknesses": ["未发现明显短板，建议面试进一步确认"],
+  "contact": {"phone": "13812345678", "email": "zhangwei@example.com"},
+  "news_flash": "整体竞争力强，建议优先沟通。",
+  "strengths": ["技能栈与岗位高度匹配", "有高并发系统的实际经验"],
+  "weaknesses": ["缺少团队管理经验"],
   "dimensions": [
-    {"key": "skill", "label": "技能匹配", "score": 100, "weight": 0.27,
-     "reason": "识别到 19 项技能，覆盖 6 个类别…"}
-  ],
-  "skills": [{"name": "微服务", "category": "后端与架构", "count": 5}]
+    {"key": "skill", "label": "技能匹配", "score": 92,
+     "reason": "简历中明确写到微服务拆分与 QPS 提升…"}
+  ]
 }
 ```
 
-> 设计意图：AI 拿到的是**已经算好的结构化结论**，不需要重新解析简历，也拿不到隐私原文。AI 的职责是二次复核与判断，而不是替代评分。
+> 设计意图：接口只暴露**已经评估完成的结构化结论**，供外部 AI / Agent 二次审查或回写结论；
+> 不返回完整简历原文。
 
 ---
 
@@ -288,7 +289,9 @@ curl -X POST -H "X-API-Token: $TOKEN" \
 
 | 内容 | 说明 |
 |---|---|
-| 岗位画像 | 该岗位看重的核心能力（带权重），或你自定义的关键词 |
+| 岗位画像 | 该岗位看重的核心能力（带权重），或你自定义的岗位关键词 |
+| 补充关键词 | 设置页填写的「补充关键词」（可选） |
+| 岗位 JD | 设置页粘贴的 JD 原文节选（可选，最多 2000 字） |
 | 筛选规则 | 最低分、最低年限、最低学历、必备关键词、淘汰关键词 |
 | 稀有度阈值 | SSR / SR 的分界线 |
 | 评分维度 | 技能、经验、学历、项目、岗位匹配五个维度及定义 |
@@ -396,9 +399,9 @@ curl -X POST -H "X-API-Token: $TOKEN" \
 |---|---|
 | ![选择岗位](docs/screenshots/job-picker.png) | ![速筛](docs/screenshots/screen.png) |
 
-| 详情抽屉 | AI 复核生效 |
+| 详情抽屉 | 简历库 |
 |---|---|
-| ![详情](docs/screenshots/detail.png) | ![AI](docs/screenshots/ai-review.png) |
+| ![详情](docs/screenshots/detail.png) | ![简历库](docs/screenshots/library.png) |
 
 ---
 
@@ -421,7 +424,7 @@ release/
 │   ├── config.example.yaml
 │   ├── README.txt
 │   └── LICENSE
-└── ResumeTap-v3.1.1-win64.zip      ← 上传 GitHub Release 用这个
+└── ResumeTap-v3.1.2-win64.zip      ← 上传 GitHub Release 用这个
 ```
 
 构建脚本自动完成：
@@ -503,7 +506,7 @@ resume-gacha/
 │   └── js/{app.js, charts.js}
 ├── assets/icon.ico
 ├── samples/                    # 12 份示例简历（含 PDF）
-├── tests/                      # 50 项测试（test_ai_pipeline.py 43 + test_paths.py 7）
+├── tests/                      # 51 项测试（test_ai_pipeline.py 44 + test_paths.py 7）
 ├── docs/screenshots/
 └── tools/
     ├── make_samples.py         # 生成示例简历
@@ -550,7 +553,9 @@ ResumeTap/
 
 **AI 能拿到简历原文吗？**
 
-默认不能。`/candidates` 只返回结构化评分与理由；`/candidates/{id}` 返回分段文本（教育/工作/项目/技能），但不含联系方式与完整原文。只有开「保存简历原文」并在详情页手动展开才能看到完整原文（界面内）。
+能，而且必须——评分由 AI 完成，评估时会把简历正文（最多 16000 字符）发到**你自己配置的**
+AI 接口，不会经过任何第三方服务器。对外审查 API 则是另一条链路：它只返回结构化结果，
+`/candidates/{id}` 会带分段文本（教育/工作/项目/技能）和联系方式，但不含完整原文。
 
 **支持 `.doc` 或扫描版 PDF 吗？**
 
@@ -583,10 +588,10 @@ ResumeTap/
 
 ## 隐私说明
 
-- **全程本地**：不发起网络请求（API 是本机回环），不依赖 CDN。
-- **原文可控**：可关闭原文保存（`privacy.store_raw_text: false`）。
+- **只连你配置的接口**：除 AI 评估调用你自己填写的 Base URL 外，应用不发起任何网络请求，界面不依赖 CDN。
+- **原文可控**：可关闭原文保存（`privacy.store_raw_text: false`）；关闭后无法重新评估，因为 AI 需要原文。
 - **日志脱敏**：只记录文件名、数量、异常类型，不记录正文、手机号、邮箱。
-- **API 隔离**：仅 `127.0.0.1` + 令牌鉴权，默认不返回联系方式与原文。
+- **API 隔离**：仅 `127.0.0.1` + 令牌鉴权，不返回完整原文（但会返回联系方式）。
 - **导出安全**：CSV 对以 `= + - @` 开头的字段做公式注入转义。
 
 ---
@@ -614,7 +619,7 @@ ResumeTap/
 | 17 | 简历库全选 / Ctrl+A | ✅ | 全选当前筛选结果，不误删隐藏项 |
 | 18 | 可查看评分理由与详情 | ✅ | 五维理由、优缺点、简历原文 |
 | 19 | 导出含关键字段 | ✅ | CSV/JSON/MD 含评估状态、AI 模型、维度、优缺点 |
-| 20 | 自动化测试 | ✅ | 50 passed（纯 AI 流程 + 便携路径） |
+| 20 | 自动化测试 | ✅ | 51 passed（纯 AI 流程 + 便携路径） |
 | 21 | 构建可复现 | ✅ | `python build.py` 约 25 秒，产出目录 + zip |
 
 ---

@@ -251,7 +251,6 @@ def _compose_payload(candidate_id: int, detail: dict, result: dict) -> dict:
         },
         "projects": [{"title": p.title, "description": p.description}
                      for p in extracted.projects[:10]],
-        "skill_hits": [],
         "years": extracted.years,
         "years_source": extracted.years_source,
         "degree": extracted.degree,

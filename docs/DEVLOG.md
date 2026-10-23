@@ -4,7 +4,7 @@
 > 供接手的新 Agent 理解**为什么是现在这个样子**。
 
 - 最后更新：2026-10-23
-- 当前版本：v3.1.1
+- 当前版本：v3.1.2
 - 仓库：https://github.com/iATOEL/ResumeTap
 - 项目路径：`F:\Tool\Paper\resume-gacha`
 
@@ -113,6 +113,29 @@
 
 净效果：发布脚本从 298 行降到 201 行，且不再自己实现文件清单与 HTTP 上传；
 版本历史回到真正的 git 提交序列。
+
+### 阶段 8：死代码与文档一致性清理（v3.1.2）
+
+发布后复查发现两类遗留：
+
+1. **零引用死代码（13 处模块级定义）**：`config._get_path`、`RARITY_ORDER`、
+   `extractor.GENDER_RE/AGE_RE/GRAD_RE`、`parser.parse_file`、`paths.assets_dir`、
+   `rules.SECTION_LABELS`、`services.SORT_FIELDS/_hits_text/load_state`、
+   `storage.reset_database/get_meta/set_meta`
+2. **已删功能的残留管线**：成就模块（`record_pull`/`global_stats`、前端
+   `state.achievements`、`meta` 表）与 `skill_hits` 的空写入
+
+**业务缺陷**：设置页的「补充关键词」和「岗位 JD」能保存却从未进入提示词——
+`build_prompt()` 只用了岗位画像与筛选规则。现在两者都会写进提示词
+（JD 截断 2000 字），并补了回归测试。
+
+**启动恢复**：`__main__.py` 里原有一段只打日志的"恢复未完成评估任务"，
+实际什么也不做。改为启动时把遗留的 `running` 记录退回 `pending` 并记录数量，
+否则异常退出后的那条记录永远不会再被队列领取。
+
+**文档一致性**：修正 README 目录锚点、删除已下线功能的截图
+（`docs/screenshots/ai-review.png`）、改正"AI 拿不到简历原文""全程不联网"
+这类与纯 AI 架构矛盾的隐私描述，以及"命中技能 / 六维 / 权重"等规则引擎残留措辞。
 
 ---
 
@@ -334,7 +357,7 @@
 每次改动后按这个顺序验证：
 
 ```bash
-# 1. 单元测试（45 项，纯 AI 流程用 mock 接口）
+# 1. 单元测试（51 项，纯 AI 流程用 mock 接口）
 .venv/Scripts/python.exe -m pytest -q
 
 # 2. 构建

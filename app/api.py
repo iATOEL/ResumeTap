@@ -214,7 +214,7 @@ class _Handler(BaseHTTPRequestHandler):
                 "GET /candidates": "候选人列表，支持 ?rarity=SSR&min_score=70&pending=1&sections=1",
                 "GET /candidates/{id}": "单个候选人完整评分与优缺点",
                 "GET /stats": "统计与速筛进度",
-                "GET /config": "当前评分配置（权重、阈值、筛选规则）",
+                "GET /config": "当前岗位、阈值与筛选规则",
                 "GET /export?format=json|csv|md": "导出并返回文件路径",
                 "POST /review": '{"id":1,"verdict":"liked|passed|skipped","note":"..."}',
                 "POST /review/batch": '{"items":[{"id":1,"verdict":"liked"}]}',

@@ -23,7 +23,7 @@ import sys
 from pathlib import Path
 
 APP_TITLE = "ResumeTap"
-APP_VERSION = "3.1.1"
+APP_VERSION = "3.1.2"
 
 # 旧版本使用的 %APPDATA% 目录名，用于一次性迁移
 LEGACY_DATA_DIR_NAME = "ResumeGacha"
@@ -164,10 +164,6 @@ def _prefer_visible(name: str) -> Path | None:
 
 def ui_dir() -> Path:
     return _prefer_visible("ui") or (resource_dir() / "ui")
-
-
-def assets_dir() -> Path:
-    return _prefer_visible("assets") or (resource_dir() / "assets")
 
 
 def samples_dir() -> Path:

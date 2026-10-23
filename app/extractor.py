@@ -59,9 +59,6 @@ YEARS_RE = re.compile(
     r"(?:工作|开发|研发|从业|相关|行业|项目|产品|测试|运营|算法|后端|前端|全栈|技术|管理|测试|数据)?\s*经验"
 )
 HEADER_NAME_RE = re.compile(r"^(?:姓\s*名|名字|Name)\s*[:：]\s*([^\s|，,（(]{2,20})", re.IGNORECASE)
-GENDER_RE = re.compile(r"(?:性\s*别\s*[:：]\s*)?(男|女)(?![性生])")
-AGE_RE = re.compile(r"(?:年\s*龄\s*[:：]\s*)?(\d{2})\s*岁")
-GRAD_RE = re.compile(r"(19|20)\d{2}\s*[年./\-]?\s*(?:0?[1-9]|1[0-2])?\s*月?\s*(?:毕业|届)")
 
 @dataclass
 class ProjectItem:

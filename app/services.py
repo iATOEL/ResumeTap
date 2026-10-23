@@ -2,27 +2,16 @@
 
 import csv
 import hashlib
-import io
 import logging
-import os
 import shutil
 import time
 from pathlib import Path
 from typing import Callable, Iterable, Optional
 
-from . import config as config_module
 from . import extractor, parser, storage
 from .paths import exports_dir, resumes_dir
 
 log = logging.getLogger("resume_gacha")
-
-SORT_FIELDS = {
-    "score": "overall_score",
-    "years": "years",
-    "name": "name",
-    "created": "created_at",
-    "rarity": "rarity",
-}
 
 
 def _hash_bytes(data: bytes) -> str:
@@ -70,7 +59,6 @@ def _pending_payload(text: str, filename: str) -> dict:
         },
         "projects": [{"title": p.title, "description": p.description}
                      for p in ext.projects[:10]],
-        "skill_hits": [],
         "years": ext.years,
         "years_source": ext.years_source,
         "degree": ext.degree,
@@ -243,24 +231,6 @@ def get_candidate_detail(candidate_id: int, full: bool = False) -> Optional[dict
     return data
 
 
-def global_stats() -> dict:
-    """累计成就数据（跨筛选条件，用于成就面板）。"""
-    stats = storage.get_meta("achievements", {})
-    return stats
-
-
-def record_pull(rarity: str, config: dict) -> dict:
-    stats = storage.get_meta("achievements", {})
-    stats.setdefault("pulls", 0)
-    stats.setdefault("by_rarity", {"R": 0, "SR": 0, "SSR": 0})
-    stats.setdefault("best_score", 0)
-    stats.setdefault("first_seen", time.strftime("%Y-%m-%d"))
-    stats["pulls"] += 1
-    stats["by_rarity"][rarity] = stats["by_rarity"].get(rarity, 0) + 1
-    storage.set_meta("achievements", stats)
-    return stats
-
-
 def export_candidates(fmt: str, candidate_ids: Optional[list[int]], config: dict,
                       target_dir: Optional[str] = None) -> dict:
     """导出 CSV / JSON / Markdown 报告；ids 为空表示导出全部。"""
@@ -339,11 +309,6 @@ def _education_text(item: dict) -> str:
         if chunk.strip():
             parts.append(chunk.strip())
     return " | ".join(parts)
-
-
-def _hits_text(item: dict) -> str:
-    hits = [f"{hit.get('term')}×{hit.get('count')}" for hit in item.get("skill_hits", [])[:15]]
-    return "、".join(hits)
 
 
 def _payload(item: dict) -> dict:
@@ -495,12 +460,6 @@ def purge_orphan_files() -> int:
     return removed
 
 
-def load_state() -> dict:
-    return {
-        "config": config_module.load_config(),
-        "stats": statistics(),
-        "achievements": global_stats(),
-    }
 
 
 def sync_role_labels(config: dict) -> int:

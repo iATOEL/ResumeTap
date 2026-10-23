@@ -5,7 +5,7 @@ import sqlite3
 import threading
 from contextlib import contextmanager
 from datetime import datetime
-from typing import Any, Iterator, Optional
+from typing import Iterator, Optional
 
 from . import paths
 
@@ -32,10 +32,6 @@ CREATE TABLE IF NOT EXISTS candidates (
     reviewed_at TEXT DEFAULT '',
     eval_status TEXT DEFAULT 'pending',  -- pending / running / done / error
     eval_error TEXT DEFAULT ''
-);
-CREATE TABLE IF NOT EXISTS meta (
-    key TEXT PRIMARY KEY,
-    value TEXT
 );
 """
 
@@ -105,12 +101,6 @@ def init_if_needed() -> None:
     """启动时初始化连接与表结构（幂等）。"""
     with _lock:
         _connect()
-
-
-def reset_database() -> None:
-    """删除全部候选人记录（配置与导出文件保留）。"""
-    with session() as conn:
-        conn.execute("DELETE FROM candidates")
 
 
 def _row_to_dict(row: sqlite3.Row) -> dict:
@@ -290,26 +280,6 @@ def all_stored_paths() -> set[str]:
     with session() as conn:
         rows = conn.execute("SELECT stored_path FROM candidates WHERE stored_path != ''").fetchall()
     return {row["stored_path"] for row in rows}
-
-
-def get_meta(key: str, default: Any = None) -> Any:
-    with session() as conn:
-        row = conn.execute("SELECT value FROM meta WHERE key=?", (key,)).fetchone()
-    if not row:
-        return default
-    try:
-        return json.loads(row["value"])
-    except (json.JSONDecodeError, TypeError):
-        return default
-
-
-def set_meta(key: str, value: Any) -> None:
-    with session() as conn:
-        conn.execute(
-            "INSERT INTO meta(key, value) VALUES(?, ?) "
-            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            (key, json.dumps(value, ensure_ascii=False)),
-        )
 
 
 def set_review(candidate_id: int, verdict: str, note: str = "") -> bool:

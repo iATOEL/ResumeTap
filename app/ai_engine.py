@@ -131,6 +131,18 @@ def _role_block(config: dict) -> str:
     return "\n".join(lines)
 
 
+def _extra_block(config: dict) -> str:
+    """用户补充的关键词与 JD：写进提示词，作为岗位画像之外的额外要求。"""
+    lines: list[str] = []
+    keywords = [str(k).strip() for k in (config.get("keywords") or []) if str(k).strip()]
+    if keywords:
+        lines.append("额外关注关键词：" + "、".join(keywords[:40]))
+    jd = str(config.get("jd_text") or "").strip()
+    if jd:
+        lines.append("岗位 JD（节选，供参考）：\n" + jd[:2000])
+    return "\n".join(lines)
+
+
 def _screening_block(config: dict) -> str:
     rules = config.get("screening", {}) or {}
     parts = []
@@ -155,8 +167,9 @@ def _screening_block(config: dict) -> str:
 
 def build_prompt(resume_text: str, config: dict) -> str:
     rarity = config.get("rarity", {})
+    role_block = "\n".join(part for part in (_role_block(config), _extra_block(config)) if part)
     return USER_PROMPT.format(
-        role_block=_role_block(config),
+        role_block=role_block,
         screening_block=_screening_block(config),
         ssr=rarity.get("ssr", 82),
         sr=rarity.get("sr", 66),

@@ -74,16 +74,12 @@ def main() -> int:
     from .bridge import Bridge
 
     storage.init_if_needed()
-
-    # 恢复未完成的评估任务（上次退出时还有 pending）
+    # 上次异常退出可能留下 running 记录：退回 pending，否则它永远不会被再次领取
     try:
-        from . import config as _cfg
-        from .eval_queue import QUEUE
-        _settings = _cfg.load_config()
-        if (_settings.get("llm", {}).get("auto_start", True)
-                and storage.count_by_eval_status("pending") > 0
-                and _settings.get("llm", {}).get("api_key")):
-            log.info("恢复未完成的 AI 评估任务")
+        reset = storage.reset_running_to_pending()
+        pending = storage.count_by_eval_status("pending")
+        if pending:
+            log.info("启动时有 %d 份待评估简历（本次恢复 %d 份中断记录）", pending, reset)
     except Exception:  # noqa: BLE001
         log.exception("检查待评估任务失败")
 

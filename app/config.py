@@ -87,15 +87,6 @@ def _set_path(data: dict, dotted: str, value: Any) -> None:
     node[parts[-1]] = value
 
 
-def _get_path(data: dict, dotted: str) -> Any:
-    node: Any = data
-    for part in dotted.split("."):
-        if not isinstance(node, dict) or part not in node:
-            return None
-        node = node[part]
-    return node
-
-
 def _migrate(raw: dict) -> tuple[dict, bool]:
     """按版本升级配置，返回 (配置, 是否发生升级)。"""
     if not isinstance(raw, dict):
@@ -134,10 +125,10 @@ rarity:
 #   data 数据分析 / algorithm 算法 / product 产品 / test 测试 / ops 运维
 role: ""
 
-# 自定义关键词（留空则该维度不计入综合分）
+# 补充关键词（可选，会写进评估提示词）
 keywords: []
 
-# 岗位 JD 原文（可选，用于提取额外关键词提升岗位匹配度）
+# 岗位 JD 原文（可选，会写进评估提示词）
 jd_text: ""
 
 screening:
@@ -307,6 +298,3 @@ def rarity_of(score: float, config: dict) -> str:
     if score >= config["rarity"]["sr"]:
         return "SR"
     return "R"
-
-
-RARITY_ORDER = {"SSR": 3, "SR": 2, "R": 1}

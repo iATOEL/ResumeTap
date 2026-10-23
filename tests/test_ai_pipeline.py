@@ -695,3 +695,16 @@ def test_markdown_omits_zero_weight(tmp_path, mock_ai):
     result = services.export_candidates("md", None, cfg, target_dir=str(tmp_path / "out"))
     content = Path(result["path"]).read_text(encoding="utf-8")
     assert "权重" not in content
+
+
+def test_prompt_includes_extra_keywords_and_jd():
+    """设置页的补充关键词与岗位 JD 必须真正进入提示词。"""
+    cfg = config_module.normalize({
+        "role": "backend",
+        "keywords": ["Kubernetes", "高并发"],
+        "jd_text": "负责订单系统的架构设计与性能优化",
+    })
+    prompt = ai_engine.build_prompt("简历正文", cfg)
+    assert "Kubernetes" in prompt
+    assert "高并发" in prompt
+    assert "负责订单系统的架构设计与性能优化" in prompt

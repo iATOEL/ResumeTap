@@ -277,11 +277,11 @@
                 <select id="roleSelect"></select>
               </label>
               <label class="field">
-                <span>自定义关键词（逗号分隔，留空则该项不计入）</span>
+                <span>补充关键词（逗号分隔，会写进评估提示词）</span>
                 <textarea id="keywordsInput" rows="2" placeholder="例如：Python, 微服务, 高并发"></textarea>
               </label>
               <label class="field">
-                <span>岗位 JD（可选，自动提取关键词）</span>
+                <span>岗位 JD（可选，会写进评估提示词）</span>
                 <textarea id="jdInput" rows="4" placeholder="粘贴 JD 原文"></textarea>
               </label>
             </div>
@@ -326,7 +326,7 @@
             </div>
           </div>
 
-          <!-- AI 复核（用户自备接口） -->
+          <!-- AI 评估（用户自备接口） -->
           <div class="card-panel">
             <div class="panel-head">
               <div><h3>AI 评估（必需）</h3><p>本软件为纯 AI 驱动，未配置时无法评估简历</p></div>

@@ -16,15 +16,6 @@ SECTION_ALIASES = {
     "awards": ["荣誉奖项", "获奖情况", "证书资质", "资格证书", "荣誉", "奖项"],
 }
 
-SECTION_LABELS = {
-    "education": "教育背景",
-    "experience": "工作经历",
-    "projects": "项目经历",
-    "skills": "专业技能",
-    "summary": "个人总结",
-    "awards": "荣誉证书",
-}
-
 # 岗位画像：关键词 -> 权重（1-3）
 ROLE_PROFILES = {
     "backend": {

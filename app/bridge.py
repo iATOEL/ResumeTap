@@ -71,7 +71,6 @@ class Bridge:
             return self._ok(
                 config=cfg,
                 stats=services.statistics(),
-                achievements=services.global_stats(),
                 roles=[{"key": k, "label": v} for k, v in ROLE_LABELS.items()],
                 role_groups=[
                     {"label": label, "keys": keys} for label, keys in ROLE_GROUPS.items()
@@ -358,7 +357,6 @@ class Bridge:
                 return self._err(f"导入失败：{exc}")
 
         result["stats"] = services.statistics()
-        result["achievements"] = services.global_stats()
         result["candidates"] = storage.list_candidates()
         result["review"] = storage.review_summary()
         result["eval"] = storage.eval_summary()

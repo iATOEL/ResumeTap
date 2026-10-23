@@ -5,7 +5,7 @@
 
 - 项目路径：`F:\Tool\Paper\resume-gacha`
 - 仓库：https://github.com/iATOEL/ResumeTap
-- 版本：v3.1.1
+- 版本：v3.1.2
 - 状态：可用，已发布
 
 ---
@@ -52,7 +52,7 @@ resume-gacha/
 │   └── js/app.js               全部交互逻辑
 │       js/charts.js            零依赖 Canvas 图表
 ├── tests/
-│   ├── test_ai_pipeline.py     43 项：解析/提示词/AI/队列/导出/回归
+│   ├── test_ai_pipeline.py     44 项：解析/提示词/AI/队列/导出/回归
 │   └── test_paths.py           7 项：便携目录逻辑
 ├── tools/
 │   ├── release.py              ★ 推 GitHub + 上传 zip（git push + gh release）
@@ -65,7 +65,7 @@ resume-gacha/
 │   └── screenshots/
 ├── release/                    构建产物（gitignored）
 │   ├── ResumeTap/              便携目录
-│   └── ResumeTap-v3.1.1-win64.zip
+│   └── ResumeTap-v3.1.2-win64.zip
 └── samples/                    12 份示例简历
 ```
 
@@ -183,7 +183,7 @@ config_version: 6                    # 迁移用，改结构时递增
 PY=/f/Tool/Paper/.venv/Scripts/python.exe
 
 # 跑测试
-$PY -m pytest -q                       # 期望 50 passed
+$PY -m pytest -q                       # 期望 51 passed
 
 # 只跑 AI 流程测试
 $PY -m pytest tests/test_ai_pipeline.py -q
@@ -309,7 +309,7 @@ def mock_ai():
 
 发布前逐项确认：
 
-- [ ] `pytest -q` 全绿（50 项）
+- [ ] `pytest -q` 全绿（51 项）
 - [ ] 版本号改了 `app/paths.py` 的 `APP_VERSION`
 - [ ] `build.py` 跑通，`release/ResumeTap/` 结构正确
 - [ ] zip 里没有 `data.db` / `config.yaml`
@@ -340,6 +340,16 @@ def mock_ai():
 | 章节文本赋值晚于学历推断 | 项目章节的校名被当学历 | `extractor.extract()` 的顺序 |
 | `skill_hits` 无写入者 | 卡片/详情永远显示"命中技能 0" | 改为展示抽取的 `sections.skills` |
 | `statistics()` 统计未评估记录 | `pass_rate` 可超过 100% | `services.statistics()` |
+
+### v3.1.2 清理
+
+| 项目 | 说明 |
+|---|---|
+| 删除 13 处零引用定义 | 见 `docs/DEVLOG.md` 阶段 8，含 `parse_file`/`assets_dir`/`get_meta` 等 |
+| 移除成就模块残留 | 后端 `record_pull`/`global_stats`、前端 `state.achievements`、`meta` 表 |
+| **补充关键词 / 岗位 JD 生效** | 此前只保存不进提示词，现在由 `ai_engine._extra_block()` 写入 |
+| 启动恢复 `running` 记录 | `__main__.py` 启动时退回 `pending`；原先只打日志不做事 |
+| README 隐私描述 | 改正"AI 拿不到原文""全程不联网"等与纯 AI 架构矛盾的说法 |
 
 **界面冒烟手段**：`tools/ui_harness.py` 用 mock 桥接跑真实 `ui/`，
 访问它打印的 localhost 地址即可点测速筛 / 简历库 / 统计 / 设置四个页面。

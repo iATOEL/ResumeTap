@@ -3,7 +3,6 @@
   'use strict';
 
   const DEGREE_RANK = { '': 0, '中专/高中': 1, '大专': 2, '本科': 3, '硕士': 4, '博士': 5 };
-  const SOUND_KEY = 'rs-sound';
 
   const state = {
     api: null,
@@ -14,7 +13,6 @@
     roleGroups: [],
     candidates: [],
     stats: null,
-    achievements: {},
     review: null,
     view: 'screen',
     layout: 'list',
@@ -101,7 +99,6 @@
     like: () => beep([660, 880], 0.15, 0.045),
     pass: () => beep([300, 220], 0.14, 0.04),
     skip: () => beep([440], 0.09, 0.03),
-    done: () => beep([523, 659, 784, 1047], 0.22, 0.05),
     click: () => beep([700], 0.05, 0.02),
     ssr: () => beep([784, 1047, 1319], 0.26, 0.055),
   };
@@ -150,7 +147,6 @@
     state.roleGroups = data.role_groups || [];
     state.candidates = data.candidates || [];
     state.stats = data.stats;
-    state.achievements = data.achievements || {};
     state.queue = data.queue || null;
     state.eval = data.eval || null;
     state.review = data.review || null;
@@ -164,7 +160,6 @@
     if (result.candidates) state.candidates = result.candidates;
     if (result.stats) state.stats = result.stats;
     if (result.review) state.review = result.review;
-    if (result.achievements) state.achievements = result.achievements;
     if (result.eval) state.eval = result.eval;
     if (result.queue) state.queue = result.queue;
   }
@@ -1135,7 +1130,7 @@
       return;
     }
     if (!$('optAiEnabled').checked) {
-      toast('请先勾选「启用 AI 复核」', 'warn');
+      toast('请先勾选「启用 AI 评估」', 'warn');
       return;
     }
     const btn = $('btnAiTest');
@@ -1798,7 +1793,7 @@
     $('configFile').textContent = state.meta.config_path || '';
     $('logFile').textContent = state.meta.log_path || '';
 
-    // AI 复核配置
+    // AI 评估配置
     const llm = cfg.llm || {};
     $('optAiEnabled').checked = !!llm.enabled;
     $('aiBaseUrl').value = llm.base_url || 'https://api.openai.com/v1';

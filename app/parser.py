@@ -3,7 +3,6 @@
 import io
 import re
 import zipfile
-from pathlib import Path
 
 from docx import Document
 from docx.oxml.ns import qn
@@ -132,16 +131,3 @@ def parse_bytes(data: bytes, suffix: str) -> str:
     if not text:
         raise ParseError("未提取到任何文字内容，请检查文件是否为空或受保护")
     return text
-
-
-def parse_file(path: str | Path) -> str:
-    file_path = Path(path)
-    if not file_path.exists():
-        raise ParseError("文件不存在或已被移动")
-    if not file_path.is_file():
-        raise ParseError("目标不是文件")
-    try:
-        data = file_path.read_bytes()
-    except OSError as exc:
-        raise ParseError(f"无法读取文件：{exc.strerror or exc}") from exc
-    return parse_bytes(data, file_path.suffix)
