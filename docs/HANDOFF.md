@@ -336,7 +336,7 @@ def mock_ai():
 |---|---|---|
 | `doneEmptyHtml`/`bindDoneActions` 缺失 | 速筛看完后白屏 | `ui/js/app.js` 的 `renderScreen()` |
 | `requirements.txt` 缺 `httpx` | 全新环境启动即崩 | `requirements.txt` |
-| `release.py` 用前缀匹配排除目录 | 仓库里缺 `build.py`、`.gitignore` | `release.py` 的 `verify_required()` |
+| `release.py` 用前缀匹配排除目录 | 仓库里缺 `build.py`、`.gitignore` | 已改为 git push，文件清单交由 `.gitignore` 决定 |
 | 章节文本赋值晚于学历推断 | 项目章节的校名被当学历 | `extractor.extract()` 的顺序 |
 | `skill_hits` 无写入者 | 卡片/详情永远显示"命中技能 0" | 改为展示抽取的 `sections.skills` |
 | `statistics()` 统计未评估记录 | `pass_rate` 可超过 100% | `services.statistics()` |

@@ -17,13 +17,13 @@
 import argparse
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 OWNER = "iATOEL"
 REPO = "ResumeTap"
 BRANCH = "main"
-REMOTE = f"https://github.com/{OWNER}/{REPO}.git"
 
 # git 已接管源码同步；这些校验保留给 build.py 的 zip 内容
 REQUIRED_FILES = {"build.py", "run_app.py", "requirements.txt", ".gitignore", "README.md"}
@@ -144,26 +144,31 @@ def upload_asset(version: str, archive: Path) -> None:
     tag = f"v{version}"
     print(f"\n[发布] {tag}")
 
-    notes_path = ROOT / "build" / "_release_notes.md"
-    notes_path.parent.mkdir(parents=True, exist_ok=True)
-    notes_path.write_text(release_notes(version, archive), encoding="utf-8")
+    # 发布说明写成临时文件交给 gh，用完即删，避免在 build/ 留垃圾
+    with tempfile.NamedTemporaryFile("w", suffix=".md", delete=False,
+                                     encoding="utf-8") as handle:
+        handle.write(release_notes(version, archive))
+        notes_path = Path(handle.name)
 
-    # gh release create 在已存在时失败；对已有 tag 用 edit + upload 覆盖
-    existing = run(["gh", "release", "view", tag, "--repo", f"{OWNER}/{REPO}"],
-                   check=False)
-    if existing.returncode != 0:
-        run(["gh", "release", "create", tag, str(archive),
-             "--repo", f"{OWNER}/{REPO}",
-             "--title", f"ResumeTap {tag} · 便携版",
-             "--notes-file", str(notes_path)])
-        print(f"  新建 Release")
-    else:
-        run(["gh", "release", "upload", tag, str(archive), "--clobber",
-             "--repo", f"{OWNER}/{REPO}"])
-        run(["gh", "release", "edit", tag, "--repo", f"{OWNER}/{REPO}",
-             "--title", f"ResumeTap {tag} · 便携版",
-             "--notes-file", str(notes_path)])
-        print(f"  更新已有 Release")
+    try:
+        # gh release create 在已存在时失败；对已有 tag 用 edit + upload 覆盖
+        existing = run(["gh", "release", "view", tag, "--repo", f"{OWNER}/{REPO}"],
+                       check=False)
+        if existing.returncode != 0:
+            run(["gh", "release", "create", tag, str(archive),
+                 "--repo", f"{OWNER}/{REPO}",
+                 "--title", f"ResumeTap {tag} · 便携版",
+                 "--notes-file", str(notes_path)])
+            print("  新建 Release")
+        else:
+            run(["gh", "release", "upload", tag, str(archive), "--clobber",
+                 "--repo", f"{OWNER}/{REPO}"])
+            run(["gh", "release", "edit", tag, "--repo", f"{OWNER}/{REPO}",
+                 "--title", f"ResumeTap {tag} · 便携版",
+                 "--notes-file", str(notes_path)])
+            print("  更新已有 Release")
+    finally:
+        notes_path.unlink(missing_ok=True)
 
     url = run(["gh", "release", "view", tag, "--repo", f"{OWNER}/{REPO}",
                "--json", "url", "--jq", ".url"]).stdout.strip()

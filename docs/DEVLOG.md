@@ -101,6 +101,19 @@
 `pass_rate` 会算出 200% 的统计口径问题。新增 `tools/ui_harness.py`
 （mock 桥接 + 真实前端）作为界面冒烟手段。
 
+### 阶段 7：发布链路迁回 git + gh（v3.1.1 之后）
+
+网络环境恢复、本机配置好 GitHub CLI 后，把项目变回**标准 git 仓库**：
+
+- `git init` → fetch 远端历史 → 工作区文件与远端逐字节比对，确认 0 差异
+  （曾经用 REST 上传，担心字节不一致；实测 `core.autocrlf=false` 下完全一致）
+- `gh auth setup-git` 让 gh 充当 git 凭证助手，脚本不再需要 `GITHUB_TOKEN`
+- `tools/release.py` 重写：`git add/commit/push` + `gh release create/upload --clobber`
+- 删除 `tools/push_via_api.py`（REST 逐 blob 上传的历史绕行方案，151 行）
+
+净效果：发布脚本从 285 行降到 190 行，且不再自己实现文件清单与 HTTP 上传；
+版本历史回到真正的 git 提交序列。
+
 ---
 
 ## 三、踩过的坑（按严重程度排序）
@@ -184,8 +197,8 @@
 
 **修复**：
 1. 删除残留文件与已归档的旧测试
-2. `tools/release.py` 加 `audit_stray_files()`：根目录发现散落文档就警告并自动排除
-3. `collect_files()` 只允许 `samples/` 与 `docs/` 下出现 docx/pdf
+2. `tools/release.py` 加 `audit_stray_files()`：根目录发现散落文档就警告；现在改为**直接拒绝发布**，避免误提交
+3. 文档类文件只允许出现在 `samples/` 与 `docs/` 下
 
 ### 坑 8：SQLite 加列时索引先于列创建
 
@@ -227,7 +240,9 @@
 
 **根因**：`release.py` 的 `collect_files()` 用 `rel.startswith(ex)` 判断排除目录，`"build.py".startswith("build")` 与 `".gitignore".startswith(".git")` 都成立，于是被当成构建产物排除。
 
-**修复**：改为按路径分段匹配（`set(rel.parts[:-1]) & EXCLUDE_DIRS`），并加 `REQUIRED_FILES` 校验，缺关键文件直接中止发布。
+**修复**：当时的做法是改为按路径分段匹配（`set(rel.parts[:-1]) & EXCLUDE_DIRS`），
+并加 `REQUIRED_FILES` 校验。**后续**发布链路整体迁到 git push 后，这套手工文件清单
+连同排除规则一起被删除——`git` 只按 `.gitignore` 判断，不会再出现同名前缀误伤。
 
 ### 坑 13：项目章节里的校名被当成学历（v3.1.1 修复）
 
