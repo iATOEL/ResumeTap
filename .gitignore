@@ -33,6 +33,10 @@ tools/_harness/
 tools/_remote/
 tools/_v3b.py
 
+# 开发者文档（本地维护，不上传仓库）
+docs/DEVLOG.md
+docs/HANDOFF.md
+
 # 系统
 .DS_Store
 Thumbs.db
