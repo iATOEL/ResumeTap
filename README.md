@@ -453,12 +453,13 @@ release/
 
 ### 发布到 GitHub
 
+前置：安装 [gh CLI](https://cli.github.com/) 并 `gh auth login`（git push 凭证由它提供）。
+
 ```bash
-export GITHUB_TOKEN=你的token
 .venv/Scripts/python.exe tools/release.py
 ```
 
-脚本会：推送源码（排除构建产物与本地数据）→ 创建/更新对应版本的 Release →
+脚本会：`git push` 源码 → 创建/更新对应版本的 Release →
 上传 `ResumeTap-v<版本>-win64.zip`。
 
 只做其中一步：

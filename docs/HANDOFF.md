@@ -55,7 +55,7 @@ resume-gacha/
 │   ├── test_ai_pipeline.py     43 项：解析/提示词/AI/队列/导出/回归
 │   └── test_paths.py           7 项：便携目录逻辑
 ├── tools/
-│   ├── release.py              ★ 推 GitHub + 上传 zip（不用 git push）
+│   ├── release.py              ★ 推 GitHub + 上传 zip（git push + gh release）
 │   ├── make_samples.py         生成示例简历
 │   ├── make_icon.py            生成图标
 │   ├── cdp_shot.py             CDP 截图（极简 WebSocket 实现）
@@ -171,7 +171,7 @@ config_version: 6                    # 迁移用，改结构时递增
 6. **改 HTML 结构后，`grep` 旧元素 id**。JS 里取 DOM 一律判空（`if (el) el.classList...`）。
 7. **稀有度不采信 AI**。始终用 `config_module.rarity_of(score, config)`。
 8. **联系方式与教育经历由本地解析**。别指望 AI 抄写这些字段。
-9. **不要用 `git push`**。网络阻断，用 `tools/release.py`（GitHub REST API）。
+9. **发布用 `tools/release.py`**（内部走 `git push` + `gh release`）。要求已安装 gh 并 `gh auth login`；git push 凭证由 gh 提供。若 git 协议再次被阻断，脚本会直接报错——不要悄悄换回 REST 逐文件上传，先确认网络。
 10. **发布前确认 zip 里没有 `data.db` / `config.yaml`**（构建脚本会清，但改脚本时注意别破坏）。
 
 ---
@@ -197,8 +197,7 @@ $PY build.py --no-zip
 # 单文件 exe（备选，不便携）
 $PY build.py --onefile
 
-# 发布到 GitHub（推送源码 + 上传 zip）
-export GITHUB_TOKEN=xxx
+# 发布到 GitHub（推送源码 + 上传 zip；前置：gh auth login）
 $PY tools/release.py
 
 # 只上传 zip / 只推源码

@@ -1,64 +1,48 @@
-"""发布到 GitHub：推送源码 + 上传便携版 zip 到 Release。
+"""发布到 GitHub：git push 源码 + gh release 上传便携版 zip。
 
 用法（Git Bash）::
 
-    export GITHUB_TOKEN=你的token
-    python tools/release.py                 # 推送源码 + 创建/更新 Release
-    python tools/release.py --skip-code     # 只上传 zip
-    python tools/release.py --skip-asset    # 只推源码
+    <venv>/Scripts/python.exe tools/release.py               # 推送源码 + 创建/更新 Release
+    <venv>/Scripts/python.exe tools/release.py --skip-code   # 只上传 zip
+    <venv>/Scripts/python.exe tools/release.py --skip-asset   # 只推源码
 
-前置：先运行 `python build.py` 生成 release/ResumeTap-v*-win64.zip
+前置：
+  1. gh CLI 已安装并 `gh auth login`（git push 凭证由 gh 提供）
+  2. 已运行 `build.py` 生成 release/ResumeTap-v*-win64.zip
+
+历史说明：早期网络阻断 git 协议，这里曾用 REST API 逐 blob 上传；
+网络恢复并配置 gh 后已改回 git push + gh release（v3.1.1）。
 """
 
 import argparse
-import base64
-import http.client
-import json
-import os
+import subprocess
 import sys
-import urllib.error
-import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 OWNER = "iATOEL"
 REPO = "ResumeTap"
 BRANCH = "main"
-API = "https://api.github.com"
+REMOTE = f"https://github.com/{OWNER}/{REPO}.git"
 
-EXCLUDE_DIRS = {
-    ".git", "build", "dist", "release", ".devdata", "__pycache__",
-    ".venv", ".pytest_cache", "_probe", "_bad", "_legacy",
-}
-EXCLUDE_PATHS = {"tools/_probe", "tools/_bad", "tests/_legacy", "tools/_remote"}
-EXCLUDE_SUFFIX = {".pyc", ".pyo", ".exe", ".zip", ".spec"}
-EXCLUDE_NAMES = {
-    "config.yaml", "data.db", "data.db-shm", "data.db-wal",
-    "Thumbs.db", ".DS_Store",
-}
-# 只允许 samples/ 与 docs/ 下出现二进制文档，根目录的散落简历一律视为测试残留
-ALLOWED_DOC_DIRS = ("samples/", "docs/")
-DOC_SUFFIX = {".docx", ".pdf", ".doc", ".md", ".txt"}
-
-TOKEN = os.environ.get("GITHUB_TOKEN", "").strip()
+# git 已接管源码同步；这些校验保留给 build.py 的 zip 内容
+REQUIRED_FILES = {"build.py", "run_app.py", "requirements.txt", ".gitignore", "README.md"}
 
 
-def api(method: str, path: str, payload=None):
-    url = path if path.startswith("http") else API + path
-    data = json.dumps(payload).encode() if payload is not None else None
-    req = urllib.request.Request(url, data=data, method=method)
-    req.add_header("Authorization", f"Bearer {TOKEN}")
-    req.add_header("Accept", "application/vnd.github+json")
-    req.add_header("X-GitHub-Api-Version", "2022-11-28")
-    if data:
-        req.add_header("Content-Type", "application/json")
+def run(cmd: list[str], check: bool = True, **kwargs) -> subprocess.CompletedProcess:
+    result = subprocess.run(cmd, cwd=str(ROOT), capture_output=True, text=True, **kwargs)
+    if check and result.returncode != 0:
+        raise SystemExit(f"✗ 命令失败：{' '.join(cmd)}\n{result.stdout}{result.stderr}")
+    return result
+
+
+def require_gh() -> None:
     try:
-        with urllib.request.urlopen(req, timeout=120) as resp:
-            body = resp.read()
-            return json.loads(body) if body else {}
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", "ignore")[:500]
-        raise RuntimeError(f"{method} {path} -> HTTP {exc.code}: {detail}") from exc
+        run(["gh", "auth", "status"], check=False)
+    except FileNotFoundError as exc:
+        raise SystemExit(
+            "✗ gh CLI 不可用。请安装并运行：gh auth login\n"
+            "  https://cli.github.com/") from exc
 
 
 def app_version() -> str:
@@ -70,89 +54,41 @@ def app_version() -> str:
 
 # ---------------------------------------------------------------- 源码
 
-def collect_files() -> dict[str, Path]:
-    files: dict[str, Path] = {}
-    for path in ROOT.rglob("*"):
-        if not path.is_file():
-            continue
-        rel = path.relative_to(ROOT)
-        rel_posix = rel.as_posix()
-        # 只按路径分段匹配目录名，避免 "build.py" 被 "build" 前缀误伤
-        if set(rel.parts[:-1]) & EXCLUDE_DIRS or rel.parts[0] in EXCLUDE_DIRS:
-            continue
-        if any(rel_posix == ex or rel_posix.startswith(ex + "/") for ex in EXCLUDE_PATHS):
-            continue
-        if path.suffix.lower() in EXCLUDE_SUFFIX:
-            continue
-        if rel.name in EXCLUDE_NAMES:
-            continue
-        if rel.suffix.lower() in {".docx", ".pdf", ".doc"}:
-            if not rel_posix.startswith(ALLOWED_DOC_DIRS):
-                continue
-        files[rel_posix] = path
-    return files
-
-
 def audit_stray_files() -> list[str]:
-    """找出根目录下不该提交的散落文档（多为测试残留）。"""
-    stray = []
-    for path in ROOT.iterdir():
-        if path.is_file() and path.suffix.lower() in {".docx", ".pdf", ".doc"}:
-            stray.append(path.name)
+    """根目录散落的简历文档多为测试残留，推上去会污染仓库。"""
+    stray = [p.name for p in ROOT.iterdir()
+             if p.is_file() and p.suffix.lower() in {".docx", ".pdf", ".doc"}]
     return stray
 
 
-REQUIRED_FILES = {"build.py", "run_app.py", "requirements.txt", ".gitignore", "README.md"}
-
-
-def verify_required(files: dict[str, Path]) -> None:
-    """关键文件缺失时中止，否则仓库会悄悄少文件（build.py 曾被误排除）。"""
-    missing = sorted(REQUIRED_FILES - set(files))
+def verify_required() -> None:
+    missing = sorted(name for name in REQUIRED_FILES if not (ROOT / name).exists())
     if missing:
-        raise SystemExit(f"✗ 待推送文件中缺少关键文件：{', '.join(missing)}")
+        raise SystemExit(f"✗ 缺少关键文件：{', '.join(missing)}")
 
 
 def push_code(message: str) -> str:
+    verify_required()
     stray = audit_stray_files()
     if stray:
-        print(f"\n⚠ 根目录发现 {len(stray)} 个文档文件，已自动排除（疑似测试残留）：")
+        print(f"\n⚠ 根目录发现 {len(stray)} 个文档文件（疑似测试残留）：")
         for name in stray[:10]:
             print(f"    {name}")
-        print("  建议手动删除，避免污染工作目录。")
+        raise SystemExit("  请先删除或移走它们再发布。")
 
-    print(f"\n[源码] 推送 {OWNER}/{REPO} @ {BRANCH}")
-    ref = api("GET", f"/repos/{OWNER}/{REPO}/git/ref/heads/{BRANCH}")
-    parent_sha = ref["object"]["sha"]
-    parent = api("GET", f"/repos/{OWNER}/{REPO}/git/commits/{parent_sha}")
-    print(f"  父提交 {parent_sha[:8]}")
+    run(["git", "add", "-A"])
+    status = run(["git", "status", "--short"]).stdout.strip()
+    if not status:
+        print("[源码] 没有改动，跳过提交")
+    else:
+        print(f"[源码] 提交 {len(status.splitlines())} 个文件变动")
+        run(["git", "commit", "-m", message])
 
-    files = collect_files()
-    verify_required(files)
-    print(f"  本地文件 {len(files)} 个，上传 blob…")
-    entries = []
-    for index, (rel, local) in enumerate(sorted(files.items()), start=1):
-        content = base64.b64encode(local.read_bytes()).decode()
-        blob = api("POST", f"/repos/{OWNER}/{REPO}/git/blobs",
-                   {"content": content, "encoding": "base64"})
-        entries.append({
-            "path": rel,
-            "mode": "100755" if rel.endswith(".bat") else "100644",
-            "type": "blob",
-            "sha": blob["sha"],
-        })
-        if index % 10 == 0 or index == len(files):
-            print(f"    {index}/{len(files)}")
-
-    tree = api("POST", f"/repos/{OWNER}/{REPO}/git/trees", {"tree": entries})
-    commit = api("POST", f"/repos/{OWNER}/{REPO}/git/commits", {
-        "message": message,
-        "tree": tree["sha"],
-        "parents": [parent_sha],
-    })
-    api("PATCH", f"/repos/{OWNER}/{REPO}/git/refs/heads/{BRANCH}",
-        {"sha": commit["sha"], "force": False})
-    print(f"  提交 {commit['sha'][:8]}")
-    return commit["sha"]
+    print(f"[源码] 推送 {OWNER}/{REPO} @ {BRANCH}")
+    run(["git", "push", "origin", BRANCH])
+    sha = run(["git", "rev-parse", "HEAD"]).stdout.strip()
+    print(f"  提交 {sha[:8]}")
+    return sha
 
 
 # ---------------------------------------------------------------- 资源
@@ -167,67 +103,7 @@ def find_archive() -> Path:
     return candidates[-1]
 
 
-def upload_asset(version: str, archive: Path, notes: str) -> None:
-    tag = f"v{version}"
-    print(f"\n[发布] {tag}")
-
-    existing = None
-    try:
-        existing = api("GET", f"/repos/{OWNER}/{REPO}/releases/tags/{tag}")
-    except RuntimeError:
-        existing = None
-
-    if existing:
-        release = api("PATCH", f"/repos/{OWNER}/{REPO}/releases/{existing['id']}",
-                      {"name": f"ResumeTap {tag} · 便携版",
-                       "body": notes})
-        print(f"  更新已有 Release：{release['html_url']}")
-    else:
-        release = api("POST", f"/repos/{OWNER}/{REPO}/releases", {
-            "tag_name": tag,
-            "target_commitish": BRANCH,
-            "name": f"ResumeTap {tag} · 便携版",
-            "body": notes,
-            "draft": False,
-            "prerelease": False,
-        })
-        print(f"  新建 Release：{release['html_url']}")
-
-    # 清掉同版本旧资产（同名会冲突）
-    assets = api("GET", f"/repos/{OWNER}/{REPO}/releases/{release['id']}/assets")
-    for asset in assets if isinstance(assets, list) else []:
-        if asset["name"] == archive.name:
-            print(f"  删除旧资产 {asset['name']}")
-            api("DELETE", f"/repos/{OWNER}/{REPO}/releases/assets/{asset['id']}")
-
-    print(f"  上传 {archive.name}（{archive.stat().st_size/1048576:.1f} MB）…")
-    size = archive.stat().st_size
-    conn = http.client.HTTPSConnection("uploads.github.com", timeout=900)
-    conn.putrequest(
-        "POST",
-        f"/repos/{OWNER}/{REPO}/releases/{release['id']}/assets?name={archive.name}")
-    conn.putheader("Authorization", f"Bearer {TOKEN}")
-    conn.putheader("Accept", "application/vnd.github+json")
-    conn.putheader("Content-Type", "application/zip")
-    conn.putheader("Content-Length", str(size))
-    conn.endheaders()
-    with open(archive, "rb") as handle:
-        while True:
-            chunk = handle.read(1024 * 1024)
-            if not chunk:
-                break
-            conn.send(chunk)
-    response = conn.getresponse()
-    body = response.read().decode()
-    conn.close()
-    if response.status != 201:
-        raise SystemExit(f"✗ 上传失败 HTTP {response.status}: {body[:400]}")
-    data = json.loads(body)
-    print(f"  ✓ {data['browser_download_url']}")
-
-
-def release_notes(version: str) -> str:
-    archive = find_archive()
+def release_notes(version: str, archive: Path) -> str:
     return f"""## ResumeTap {version} · 便携版（绿色版）
 
 **下载下面的 `{archive.name}`，解压后双击 `ResumeTap.exe` 即可运行。**
@@ -264,11 +140,37 @@ Windows 10/11（自带 WebView2）。不支持 macOS / Linux。
 """
 
 
-def main() -> int:
-    if not TOKEN:
-        print("缺少环境变量 GITHUB_TOKEN")
-        return 1
+def upload_asset(version: str, archive: Path) -> None:
+    tag = f"v{version}"
+    print(f"\n[发布] {tag}")
 
+    notes_path = ROOT / "build" / "_release_notes.md"
+    notes_path.parent.mkdir(parents=True, exist_ok=True)
+    notes_path.write_text(release_notes(version, archive), encoding="utf-8")
+
+    # gh release create 在已存在时失败；对已有 tag 用 edit + upload 覆盖
+    existing = run(["gh", "release", "view", tag, "--repo", f"{OWNER}/{REPO}"],
+                   check=False)
+    if existing.returncode != 0:
+        run(["gh", "release", "create", tag, str(archive),
+             "--repo", f"{OWNER}/{REPO}",
+             "--title", f"ResumeTap {tag} · 便携版",
+             "--notes-file", str(notes_path)])
+        print(f"  新建 Release")
+    else:
+        run(["gh", "release", "upload", tag, str(archive), "--clobber",
+             "--repo", f"{OWNER}/{REPO}"])
+        run(["gh", "release", "edit", tag, "--repo", f"{OWNER}/{REPO}",
+             "--title", f"ResumeTap {tag} · 便携版",
+             "--notes-file", str(notes_path)])
+        print(f"  更新已有 Release")
+
+    url = run(["gh", "release", "view", tag, "--repo", f"{OWNER}/{REPO}",
+               "--json", "url", "--jq", ".url"]).stdout.strip()
+    print(f"  ✓ {url}")
+
+
+def main() -> int:
     parser = argparse.ArgumentParser(description="发布 ResumeTap 到 GitHub")
     parser.add_argument("--skip-code", action="store_true", help="只上传 zip")
     parser.add_argument("--skip-asset", action="store_true", help="只推送源码")
@@ -279,16 +181,12 @@ def main() -> int:
     archive = None if args.skip_asset else find_archive()
 
     if not args.skip_code:
-        message = args.message or (
-            f"build: 便携版打包（v{version}）\n\n"
-            "打包方式改为绿色版目录结构：exe + _internal 依赖 + ui/assets/samples 资源 "
-            "+ data 数据目录，整体压缩为 zip 发布。\n"
-            "数据默认保存在程序目录下的 data/，实现真正便携。"
-        )
+        message = args.message or f"chore: release v{version}"
         push_code(message)
 
     if archive:
-        upload_asset(version, archive, release_notes(version))
+        require_gh()
+        upload_asset(version, archive)
 
     print(f"\n完成：https://github.com/{OWNER}/{REPO}")
     return 0

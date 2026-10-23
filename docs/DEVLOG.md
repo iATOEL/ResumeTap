@@ -333,12 +333,12 @@ ls release/ResumeTap/
 #    - data/ 自动生成（说明便携模式生效）
 #    - 未配置 AI 时导入简历分数为 0
 
-# 5. 发布
-export GITHUB_TOKEN=...
+# 5. 发布（前置：gh auth login）
 .venv/Scripts/python.exe tools/release.py
 ```
 
 **界面自检脚本**（`tools/` 下）：
+- `ui_harness.py`：mock 桥接 + 真实前端，浏览器里点测四个页面（主力冒烟手段）
 - `ui_probe6.py` / `ui_probe7.py`：用 CDP 驱动真实窗口，验证 AI 队列自动/手动模式
 - 依赖 `cdp_shot.py`（极简 WebSocket 客户端，用于截图）
 - 启动 exe 时设 `RESUME_GACHA_CDP_PORT=9345` 开启远程调试端口
@@ -353,8 +353,10 @@ pywebview>=5.3,<6      桌面窗口
 python-docx            DOCX 解析
 PyMuPDF                PDF 解析
 PyYAML                 配置
+httpx>=0.27            AI 接口调用（v3.1.1 补进 requirements）
 pyinstaller>=6.11      打包
 pytest                 测试
+gh CLI                 发布（git push 凭证 + release 上传）
 ```
 
 **环境铁律**（沿用项目 AGENTS.md）：
@@ -364,14 +366,17 @@ pytest                 测试
 
 ---
 
-## 九、GitHub 访问的特殊情况
+## 九、GitHub 访问说明
 
-**直连 git 协议被阻断**：`git push` 超时（`https://github.com/.../info/refs` 无响应），但 `api.github.com` 正常。
+**历史情况**：v3.0~v3.1.0 期间直连 git 协议被阻断（`git push` 超时，`api.github.com` 正常），
+当时的 `tools/release.py` 用 REST API 逐文件上传 blob → 组装 tree → 更新 ref，
+还配了一个 `push_via_api.py`。这套方案有两个代价：
+1. 仓库没有真正的 git 历史（每次一个全量快照提交）
+2. 排除规则出过 bug（见坑 12：`build.py` 被前缀匹配误排除）
 
-**解决方案**：`tools/release.py` 用 **GitHub REST API** 完成推送：
-1. 取当前 `main` 的 commit 作为父提交
-2. 逐个文件创建 blob → 组装 tree → 创建 commit → 更新 ref
+**现状**：网络恢复 + 配置 gh CLI 后，v3.1.1 起 `release.py` 改为
+**`git push`（源码）+ `gh release`（zip 资产）**，旧的 REST 逻辑已删除。
+`gh auth setup-git` 让 gh 充当 git 的凭证助手，无需在脚本里管 token。
 
-所以**不要**试图用 `git push`，用 `release.py`。
-
-Token 通过环境变量 `GITHUB_TOKEN` 传入，不写在代码里。
+若将来 git 协议再次不通，脚本会直接报错停下来——先确认网络/VPN，
+不要悄悄换回 REST 逐文件上传。
