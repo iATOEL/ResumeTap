@@ -280,6 +280,8 @@ eval_queue.EvalQueue（串行）
 - 提交前跑 `.venv/Scripts/python.exe -m pytest -q`，保持全绿。
 - 不要提交 `release/`、`build/`、`data/`、`.devdata/`、`config.yaml`（均已在 `.gitignore`）。
 - 新增 Python 依赖：同步更新 `requirements.txt`；新增前端资源：确认不依赖 CDN。
+- 行为或流程变更时同步更新本文档（`docs/DEVELOPMENT.md`）。
+  维护者的个人开发日志不随仓库发布，无需在此提及。
 - 涉及界面改动时，建议附截图或说明验证方式。
 
 ---
