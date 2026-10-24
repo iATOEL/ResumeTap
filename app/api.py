@@ -232,7 +232,7 @@ class _Handler(BaseHTTPRequestHandler):
         min_score = float(query.get("min_score", ["0"])[0] or 0)
         limit = min(500, max(1, int(query.get("limit", ["100"])[0] or 100)))
 
-        items = storage.list_pending() if pending_only else storage.list_candidates()
+        items = storage.list_pending() if pending_only else storage.list_candidates(full=True)
         if rarity in {"R", "SR", "SSR"}:
             items = [i for i in items if i["rarity"] == rarity]
         if min_score > 0:

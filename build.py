@@ -33,7 +33,7 @@ BUILD = ROOT / "build"
 RELEASE = ROOT / "release"
 APP_DIR = RELEASE / APP_NAME
 
-VERSION = "3.1.2"
+VERSION = "3.2.0"
 
 
 def _read_version() -> str:

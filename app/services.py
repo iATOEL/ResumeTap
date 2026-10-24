@@ -175,46 +175,71 @@ def rescore_all(config: dict, keep_ai: bool = True) -> dict:
 
 
 def statistics() -> dict:
-    candidates = storage.list_candidates()
-    total = len(candidates)
-    counts = {"R": 0, "SR": 0, "SSR": 0}
-    status_counts = {"pass": 0, "flagged": 0, "rejected": 0}
-    review_counts = {"": 0, "liked": 0, "passed": 0, "skipped": 0}
-    scores, years = [], []
-    evaluated = 0
-    for item in candidates:
-        review_counts[item.get("review_verdict", "")] = review_counts.get(item.get("review_verdict", ""), 0) + 1
-        # 稀有度与筛选结论都由 AI 产出：未评估的记录只是占位值（R / pass），
-        # 计入会让 pass_rate、ssr_rate 超过 100%
-        if item.get("eval_status") != "done":
-            continue
-        counts[item["rarity"]] = counts.get(item["rarity"], 0) + 1
-        status_counts[item["status"]] = status_counts.get(item["status"], 0) + 1
-        evaluated += 1
-        scores.append(item["overall_score"])
-        years.append(item.get("years") or 0)
+    """统计概览。
 
-    passed = status_counts["pass"]
-    best = max((c for c in candidates if c.get("eval_status") == "done"),
-               key=lambda c: c["overall_score"], default=None)
+    全部用 SQL 聚合，不加载候选人行——这个函数几乎每个桥接调用都会触发，
+    之前为计数把整表（含 payload JSON）读进内存，是大库卡顿的主要来源。
+    口径：稀有度/筛选结论只统计 eval_status='done' 的记录（未评估的只是占位值）。
+    """
+    with storage.session() as conn:
+        total = conn.execute("SELECT COUNT(*) n FROM candidates").fetchone()["n"]
+        review_rows = conn.execute(
+            "SELECT review_verdict v, COUNT(*) n FROM candidates GROUP BY review_verdict"
+        ).fetchall()
+        done_agg = conn.execute(
+            """SELECT COUNT(*) n,
+                      AVG(overall_score) avg_score, MAX(overall_score) max_score,
+                      AVG(years) avg_years,
+                      SUM(CASE WHEN status='pass' THEN 1 ELSE 0 END) passed
+               FROM candidates WHERE eval_status='done'"""
+        ).fetchone()
+        rarity_rows = conn.execute(
+            "SELECT rarity, COUNT(*) n FROM candidates "
+            "WHERE eval_status='done' GROUP BY rarity"
+        ).fetchall()
+        status_rows = conn.execute(
+            "SELECT status, COUNT(*) n FROM candidates "
+            "WHERE eval_status='done' GROUP BY status"
+        ).fetchall()
+        best_row = conn.execute(
+            "SELECT name, overall_score, rarity FROM candidates "
+            "WHERE eval_status='done' ORDER BY overall_score DESC LIMIT 1"
+        ).fetchone()
+
+    review_counts = {"": 0, "liked": 0, "passed": 0, "skipped": 0}
+    for row in review_rows:
+        review_counts[row["v"] or ""] = row["n"]
+
+    evaluated = int(done_agg["n"]) if done_agg else 0
+    counts = {"R": 0, "SR": 0, "SSR": 0}
+    for row in rarity_rows:
+        if row["rarity"] in counts:
+            counts[row["rarity"]] = row["n"]
+    status_counts = {"pass": 0, "flagged": 0, "rejected": 0}
+    for row in status_rows:
+        if row["status"] in status_counts:
+            status_counts[row["status"]] = row["n"]
+
+    def _round(value, digits=1):
+        return round(value, digits) if value is not None else 0.0
+
     reviewed = total - review_counts[""]
-    eval_stats = storage.eval_summary()
     return {
         "total": total,
         "evaluated": evaluated,
-        "eval": eval_stats,
+        "eval": storage.eval_summary(),
         "rarity_counts": counts,
         "status_counts": status_counts,
         "review_counts": review_counts,
         "reviewed": reviewed,
         "review_progress": round(reviewed / total * 100, 1) if total else 0.0,
-        "avg_score": round(sum(scores) / evaluated, 1) if evaluated else 0.0,
-        "max_score": round(max(scores), 1) if scores else 0.0,
-        "avg_years": round(sum(years) / evaluated, 1) if evaluated else 0.0,
-        "pass_rate": round(passed / evaluated * 100, 1) if evaluated else 0.0,
+        "avg_score": _round(done_agg["avg_score"]) if evaluated else 0.0,
+        "max_score": _round(done_agg["max_score"]) if evaluated else 0.0,
+        "avg_years": _round(done_agg["avg_years"]) if evaluated else 0.0,
+        "pass_rate": round(status_counts["pass"] / evaluated * 100, 1) if evaluated else 0.0,
         "ssr_rate": round(counts["SSR"] / evaluated * 100, 1) if evaluated else 0.0,
-        "best": {"name": best["name"], "score": best["overall_score"],
-                 "rarity": best["rarity"]} if best else None,
+        "best": {"name": best_row["name"], "score": best_row["overall_score"],
+                 "rarity": best_row["rarity"]} if best_row else None,
     }
 
 
@@ -234,7 +259,7 @@ def get_candidate_detail(candidate_id: int, full: bool = False) -> Optional[dict
 def export_candidates(fmt: str, candidate_ids: Optional[list[int]], config: dict,
                       target_dir: Optional[str] = None) -> dict:
     """导出 CSV / JSON / Markdown 报告；ids 为空表示导出全部。"""
-    all_items = storage.list_candidates()
+    all_items = storage.list_candidates(full=True)
     if candidate_ids:
         wanted = set(candidate_ids)
         all_items = [item for item in all_items if item["id"] in wanted]

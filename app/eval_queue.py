@@ -40,6 +40,7 @@ class EvalQueue:
         self._last_error = ""
         self._listener: Optional[Callable[[dict], None]] = None
         self._worker: Optional[threading.Thread] = None
+        self._gen = 0                              # worker 代数：旧 worker 见到换代即退位
 
     # ---------------- 对外接口 ----------------
 
@@ -74,19 +75,21 @@ class EvalQueue:
             if self._state == RUNNING and self._worker and self._worker.is_alive():
                 return self.snapshot()
 
-            # 保证上一个工作线程已经退出，避免两条线程同时消费队列
             old = self._worker
-            self._stop.set()
+            self._stop.set()      # 通知旧 worker：做完当前这份就退
             self._wake.set()
         if old and old.is_alive():
-            old.join(timeout=5)
+            old.join(timeout=5)   # 快速路径：暂停后通常立即退出
 
         with self._lock:
+            self._gen += 1
+            gen = self._gen
             self._stop.clear()
             self._wake.clear()
             self._state = RUNNING
-            self._worker = threading.Thread(target=self._run_loop, daemon=True,
-                                            name="ai-eval-queue")
+            prev = old if (old is not None and old.is_alive()) else None
+            self._worker = threading.Thread(target=self._run_loop, args=(gen, prev),
+                                            daemon=True, name="ai-eval-queue")
             self._worker.start()
         self._emit()
         return self.snapshot()
@@ -102,11 +105,15 @@ class EvalQueue:
         return self.snapshot()
 
     def stop_now(self) -> None:
-        """退出应用时强制停止。"""
+        """退出应用时强制停止：等在途请求收尾，避免写一半就关库。"""
         with self._lock:
+            self._gen += 1        # 换代，让 worker 在下一个检查点直接退位
             self._state = IDLE
             self._stop.set()
             self._wake.set()
+            worker = self._worker
+        if worker and worker.is_alive():
+            worker.join(timeout=3)
 
     def kick(self) -> None:
         """有新任务入队时唤醒工作线程。"""
@@ -136,23 +143,35 @@ class EvalQueue:
             storage.set_eval_status(item["id"], "running", "")
             return item
 
-    def _run_loop(self) -> None:
+    def _run_loop(self, gen: int, prev: Optional[threading.Thread]) -> None:
         from . import config as config_module
 
-        while not self._stop.is_set():
-            item = self._claim_next()
-            if not item:
+        # 串行保证：上一代 worker 可能还在处理最后一份（AI 调用最长可达 timeout 秒），
+        # 必须等它真正退出后再开始领取，否则两条线程会同时调用 AI
+        while prev is not None and prev.is_alive():
+            prev.join(timeout=0.5)
+
+        while True:
+            with self._lock:
+                if self._gen != gen or self._stop.is_set():
+                    break
+
+            # 就绪检查必须在领取之前：领了再查会把记录永久留在 running
+            cfg = config_module.load_config()
+            if not ai_engine.is_ready(cfg):
                 with self._lock:
-                    self._state = IDLE
+                    if self._gen == gen and self._state == RUNNING:
+                        self._state = PAUSED
+                    self._last_error = ai_engine.readiness_error(cfg)
                     self._current = None
                 self._emit()
                 return
 
-            cfg = config_module.load_config()
-            if not ai_engine.is_ready(cfg):
+            item = self._claim_next()
+            if not item:
                 with self._lock:
-                    self._state = PAUSED
-                    self._last_error = ai_engine.readiness_error(cfg)
+                    if self._gen == gen:
+                        self._state = IDLE
                     self._current = None
                 self._emit()
                 return
@@ -183,16 +202,24 @@ class EvalQueue:
                     self._last_error = message
 
             self._emit()
-            # 短暂间隔，避免瞬间打满接口
-            self._wake.wait(timeout=0.2)
-            self._wake.clear()
+            # 短暂间隔，避免瞬间打满接口；期间被叫停就直接退
+            if self._wake.wait(timeout=0.2):
+                self._wake.clear()
+                with self._lock:
+                    if self._gen != gen or self._stop.is_set():
+                        break
 
-        # 退出循环时，把因暂停/关闭而中断的 running 记录还原，下次可继续
-        storage.reset_running_to_pending()
+        # 只有当前代 worker 才做收尾：把中断的 running 记录退回 pending，
+        # 并把状态从 RUNNING 归位（旧代退位时这些归新 worker 管）
         with self._lock:
-            if self._state == RUNNING:
-                self._state = IDLE
-            self._current = None
+            is_current = self._gen == gen
+        if is_current:
+            storage.reset_running_to_pending()
+            with self._lock:
+                if self._state == RUNNING:
+                    self._state = IDLE
+                self._current = None
+            self._emit()
         self._emit()
 
 

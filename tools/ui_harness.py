@@ -50,10 +50,14 @@ MOCK_JS = """
       strengths: ['技术栈完整', '项目有量化成果'],
       weaknesses: ['缺少团队管理经验'],
       screen_reasons: [],
-      profile: { education_entries: [
+      // 与 v3.2.0 后端的轻量行契约一致：列表不带 payload，只带展示小字段
+      score_source: 'ai', ai_model: 'mock',
+      contact: { phone: '13812345678', email: 'lisi@example.com' },
+      education_entries: [
         { period: '2013 - 2017', school: '浙江大学', tier: 'c9', tier_label: 'C9',
           degree: '本科', major: '计算机', raw: '浙江大学 计算机 本科' },
-      ], phone_masked: '138****5678', email_masked: 'l***@example.com' },
+      ],
+      skills_text: 'Java、Spring Boot、MySQL、Redis、Docker',
       payload: {
         score_source: 'ai', ai_model: 'mock', contact: { phone: '13812345678', email: 'lisi@example.com' },
         sections: { skills: 'Java、Spring Boot、MySQL、Redis、Docker', education: '教育背景',

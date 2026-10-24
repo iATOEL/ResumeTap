@@ -245,27 +245,35 @@ class Bridge:
     def ai_evaluate_one(self, candidate_id: int) -> dict:
         """立即评估指定的一份（不经过队列，用于详情页重试）。"""
         try:
+            candidate_id = int(candidate_id)
+            # 队列正在处理这一份时拒绝，否则会重复调用 AI、双方互相覆盖结果
+            current = QUEUE.snapshot().get("current") or {}
+            if current.get("id") == candidate_id:
+                return self._err("队列正在评估这份简历，请稍候")
+
             cfg = self._config()
             if not ai_engine.is_ready(cfg):
                 return self._err(ai_engine.readiness_error(cfg))
 
-            detail = storage.get_candidate(int(candidate_id), include_raw=True)
+            detail = storage.get_candidate(candidate_id, include_raw=True)
             if not detail:
                 return self._err("简历不存在或已被删除")
             raw_text = detail.get("raw_text") or ""
             if not raw_text.strip():
                 return self._err("该简历未保存原文，无法评估")
 
+            # 先占位再调用：队列只领 pending，不会与本调用撞车
+            storage.set_eval_status(candidate_id, "running", "")
             try:
                 result = ai_engine.evaluate(raw_text, cfg)
             except Exception as exc:  # noqa: BLE001
                 message = _humanize_ai_error(exc)
-                storage.set_eval_status(int(candidate_id), "error", message)
+                storage.set_eval_status(candidate_id, "error", message)
                 return self._err(message)
 
-            payload = eval_queue._compose_payload(int(candidate_id), detail, result)
-            storage.update_candidate(int(candidate_id), payload)
-            storage.set_eval_status(int(candidate_id), "done", "")
+            payload = eval_queue._compose_payload(candidate_id, detail, result)
+            storage.update_candidate(candidate_id, payload)
+            storage.set_eval_status(candidate_id, "done", "")
 
             return self._ok(
                 candidate=storage.get_candidate(int(candidate_id), include_raw=True),

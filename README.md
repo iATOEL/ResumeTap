@@ -30,7 +30,7 @@
 ### 方式一：下载便携版（推荐）
 
 从 [Releases](https://github.com/iATOEL/ResumeTap/releases/latest) 下载
-`ResumeTap-v3.1.2-win64.zip`，解压到任意位置（桌面、U 盘都行），双击 `ResumeTap.exe`。
+`ResumeTap-v3.2.0-win64.zip`，解压到任意位置（桌面、U 盘都行），双击 `ResumeTap.exe`。
 
 解压后的目录结构：
 
@@ -506,7 +506,7 @@ resume-gacha/
 │   └── js/{app.js, charts.js}
 ├── assets/icon.ico
 ├── samples/                    # 12 份示例简历（含 PDF）
-├── tests/                      # 51 项测试（test_ai_pipeline.py 44 + test_paths.py 7）
+├── tests/                      # 56 项测试（test_ai_pipeline.py 49 + test_paths.py 7）
 ├── docs/screenshots/
 └── tools/
     ├── make_samples.py         # 生成示例简历
@@ -619,7 +619,7 @@ AI 接口，不会经过任何第三方服务器。对外审查 API 则是另一
 | 17 | 简历库全选 / Ctrl+A | ✅ | 全选当前筛选结果，不误删隐藏项 |
 | 18 | 可查看评分理由与详情 | ✅ | 五维理由、优缺点、简历原文 |
 | 19 | 导出含关键字段 | ✅ | CSV/JSON/MD 含评估状态、AI 模型、维度、优缺点 |
-| 20 | 自动化测试 | ✅ | 51 passed（纯 AI 流程 + 便携路径） |
+| 20 | 自动化测试 | ✅ | 56 passed（纯 AI 流程 + 便携路径） |
 | 21 | 构建可复现 | ✅ | `python build.py` 约 25 秒，产出目录 + zip |
 
 ---

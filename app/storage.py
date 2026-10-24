@@ -103,12 +103,13 @@ def init_if_needed() -> None:
         _connect()
 
 
-def _row_to_dict(row: sqlite3.Row) -> dict:
+def _row_to_dict(row: sqlite3.Row, *, full: bool = False) -> dict:
     try:
         payload = json.loads(row["payload"] or "{}")
     except json.JSONDecodeError:
         payload = {}
-    return {
+    sections = payload.get("sections") or {}
+    data = {
         "id": row["id"],
         "name": row["name"],
         "filename": row["filename"],
@@ -127,11 +128,7 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
         "eval_status": row["eval_status"] or "pending",
         "eval_error": row["eval_error"] or "",
         "has_raw_text": bool(row["raw_text"]),
-        "profile": payload.get("profile", {}),
         "dimensions": payload.get("dimensions", []),
-        "skill_hits": payload.get("skill_hits", []),
-        "projects": payload.get("projects", []),
-        "projects_count": len(payload.get("projects", [])),
         "screen_reasons": payload.get("screen_reasons", []),
         "strengths": payload.get("strengths", []),
         "weaknesses": payload.get("weaknesses", []),
@@ -143,8 +140,19 @@ def _row_to_dict(row: sqlite3.Row) -> dict:
         "detected_role_label": payload.get("detected_role_label", ""),
         "rarity_label": payload.get("rarity_label", ""),
         "years_source": payload.get("years_source", ""),
-        "payload": payload,
+        # 列表展示需要的小字段：避免把整个 payload（含简历全文）发给前端
+        "score_source": payload.get("score_source", ""),
+        "ai_model": payload.get("ai_model", ""),
+        "contact": payload.get("contact", {}),
+        "education_entries": (payload.get("profile") or {}).get("education_entries", []),
+        "skills_text": str(sections.get("skills") or "")[:400],
     }
+    if full:
+        data["profile"] = payload.get("profile", {})
+        data["projects"] = payload.get("projects", [])
+        data["projects_count"] = len(payload.get("projects", []))
+        data["payload"] = payload
+    return data
 
 
 def insert_candidate(*, name: str, filename: str, stored_path: str, file_hash: str,
@@ -238,12 +246,17 @@ def update_candidate(candidate_id: int, payload: dict) -> bool:
         return cursor.rowcount > 0
 
 
-def list_candidates() -> list[dict]:
+def list_candidates(*, full: bool = False) -> list[dict]:
+    """候选人列表。
+
+    full=False（默认）给前端列表用：只带展示所需小字段，不含 payload 里的简历全文；
+    full=True 给导出 / 对外 API 用，附带完整 payload。
+    """
     with session() as conn:
         rows = conn.execute(
             "SELECT * FROM candidates ORDER BY overall_score DESC, id DESC"
         ).fetchall()
-    return [_row_to_dict(row) for row in rows]
+    return [_row_to_dict(row, full=full) for row in rows]
 
 
 def get_candidate(candidate_id: int, include_raw: bool = True) -> Optional[dict]:
@@ -251,7 +264,7 @@ def get_candidate(candidate_id: int, include_raw: bool = True) -> Optional[dict]
         row = conn.execute("SELECT * FROM candidates WHERE id=?", (candidate_id,)).fetchone()
     if not row:
         return None
-    data = _row_to_dict(row)
+    data = _row_to_dict(row, full=True)
     if include_raw:
         data["raw_text"] = row["raw_text"] or ""
         data["stored_path"] = row["stored_path"] or ""

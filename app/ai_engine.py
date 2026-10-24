@@ -12,7 +12,6 @@
 
 import json
 import logging
-import re
 from typing import Optional
 
 import httpx
@@ -34,56 +33,61 @@ DIMENSION_LABELS = {
 }
 
 SYSTEM_PROMPT = (
-    "你是一位资深招聘专家，负责按岗位要求评估简历。"
-    "你的判断必须基于简历中的事实，不得编造；信息不足时在理由中说明。"
-    "只输出 JSON，不要输出任何额外文字。"
+    "你是一位资深招聘专家，按岗位要求评估简历。"
+    "判断必须基于简历中的事实，不得编造；信息不足时在理由中说明依据不足。"
+    "全部用简体中文，只输出一个 JSON 对象，不要 markdown 代码块，不要任何解释文字。"
 )
 
-USER_PROMPT = """请评估下面这份简历与目标岗位的匹配程度，严格按 JSON 结构返回。
+USER_PROMPT = """评估下面这份简历与目标岗位的匹配程度，只输出 JSON。
 
 ## 目标岗位
 {role_block}
 
-## 筛选规则（如果不满足，请把 status 设为 rejected 并说明原因）
+## 筛选规则（不满足时把 status 设为 rejected，并在 screen_reasons 说明）
 {screening_block}
 
-## 评分维度（各 0-100 分）
+## 评分标尺（各维度与综合分共用，请按此拉开区分度）
+- 90 以上：显著超出岗位要求，同岗位候选人中前 5%
+- 80–89：明显超出要求，有可验证的亮点
+- 70–79：基本满足要求，无明显短板也无突出亮点
+- 60–69：部分满足，存在明显缺口
+- 60 以下：不满足要求
+
+## 评分维度（各 0–100 分）
 - skill：技术栈/专业技能与岗位要求的匹配度
 - experience：工作年限、行业相关性、职级成长
 - education：学历层次与院校水平
 - project：项目数量、复杂度、成果量化程度
 - job_match：综合来看与目标岗位的整体契合度
 
-## 输出格式（只返回这个 JSON）
+## 输出格式（只返回这个 JSON，不要代码块包裹）
 {{
   "name": "候选人姓名",
-  "overall_score": 0-100 的综合分（数字，保留一位小数）,
-  "rarity": "SSR | SR | R（由综合分与阈值决定）",
+  "overall_score": 0-100 的综合分（数字，保留一位小数，与各维度分数一致）,
   "status": "pass | flagged | rejected",
   "dimensions": {{
-    "skill": {{"score": 0-100, "reason": "判断依据，引用简历中的具体内容"}},
-    "experience": {{"score": 0-100, "reason": "..."}},
-    "education": {{"score": 0-100, "reason": "..."}},
-    "project": {{"score": 0-100, "reason": "..."}},
-    "job_match": {{"score": 0-100, "reason": "..."}}
+    "skill": {{"score": 0-100, "reason": "判断依据"}},
+    "experience": {{"score": 0-100, "reason": "判断依据"}},
+    "education": {{"score": 0-100, "reason": "判断依据"}},
+    "project": {{"score": 0-100, "reason": "判断依据"}},
+    "job_match": {{"score": 0-100, "reason": "判断依据"}}
   }},
-  "strengths": ["优势1（引用简历事实）", "优势2", "优势3"],
+  "strengths": ["优势1", "优势2"],
   "weaknesses": ["不足1", "不足2"],
-  "summary": "一句话结论，30 字以内",
+  "summary": "一句话结论",
   "screen_reasons": ["若 status 非 pass，列出不满足的具体规则"]
 }}
 
-评分要求：
-- 要有区分度，不要所有简历都给 70-80 分
-- strengths/weaknesses 必须能对应到简历里的具体内容
-- 综合分应与各维度分数基本一致（按加权或整体判断均可）
-- 稀有度阈值：SSR >= {ssr}，SR >= {sr}，其余为 R
+## 表达要求
+- reason 必须引用简历里的具体事实：年限、技术栈、项目规模、量化成果（如 QPS、百分比）。写不出事实就写"简历未体现"并据此压分。
+- strengths 2–4 条，每条不超过 40 字，格式"强在哪 + 依据"。
+- weaknesses 1–3 条，每条不超过 40 字，格式"缺什么 + 对这个岗位的影响"。
+- 禁止套话：不要出现"未发现明显短板""综合素质良好""有待进一步了解"这类没有信息量的话。确实没有明显短板时，写最值得在面试中确认的一个疑点。
+- summary 不超过 30 字，直接给出行动建议（如"建议优先推进""谨慎考虑""不推荐"）。
+- 一批简历的分数要有区分度：多数简历不该落在 70–80 之间。
 
 ## 简历内容
 {resume}"""
-
-_JSON_RE = re.compile(r"\{.*\}", re.DOTALL)
-
 
 # ---------------------------------------------------------------- 配置就绪
 
@@ -166,31 +170,56 @@ def _screening_block(config: dict) -> str:
 
 
 def build_prompt(resume_text: str, config: dict) -> str:
-    rarity = config.get("rarity", {})
     role_block = "\n".join(part for part in (_role_block(config), _extra_block(config)) if part)
     return USER_PROMPT.format(
         role_block=role_block,
         screening_block=_screening_block(config),
-        ssr=rarity.get("ssr", 82),
-        sr=rarity.get("sr", 66),
         resume=resume_text[:MAX_RESUME_CHARS],
     )
 
 
 # ---------------------------------------------------------------- 调用
 
+def _iter_json_objects(text: str):
+    """按括号配对逐个取出完整的顶层 {...} 对象（跳过字符串里的花括号）。"""
+    depth, start, in_string, escape = 0, -1, False, False
+    for index, char in enumerate(text):
+        if in_string:
+            if escape:
+                escape = False
+            elif char == "\\":
+                escape = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char == "{":
+            if depth == 0:
+                start = index
+            depth += 1
+        elif char == "}" and depth:
+            depth -= 1
+            if depth == 0 and start >= 0:
+                yield text[start:index + 1]
+                start = -1
+
+
 def _extract_json(text: str) -> Optional[dict]:
     text = text.strip()
     if text.startswith("```"):
         lines = [line for line in text.splitlines() if not line.strip().startswith("```")]
         text = "\n".join(lines).strip()
-    match = _JSON_RE.search(text)
-    if not match:
-        return None
-    try:
-        return json.loads(match.group(0))
-    except json.JSONDecodeError:
-        return None
+    # 模型偶尔在 JSON 前后加说明文字、甚至输出两个对象：
+    # 逐个尝试括号配对的完整对象，取第一个能解析成功的
+    for candidate in _iter_json_objects(text):
+        try:
+            data = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(data, dict):
+            return data
+    return None
 
 
 def _clamp(value, default: float = 0.0) -> float:
@@ -241,8 +270,8 @@ def _post(config: dict, prompt: str) -> dict:
 
     with httpx.Client(timeout=float(llm.get("timeout", 90))) as client:
         response = client.post(url, headers=headers, json=payload)
-        if response.status_code == 400:
-            # 部分兼容服务不支持 response_format
+        if response.status_code in (400, 422):
+            # 部分兼容服务不支持 response_format，去掉后重试一次
             payload.pop("response_format", None)
             response = client.post(url, headers=headers, json=payload)
         response.raise_for_status()

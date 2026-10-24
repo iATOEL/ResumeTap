@@ -583,7 +583,7 @@ def test_save_config_updates_role_label_only(tmp_path, mock_ai):
     result = bridge.save_config(new_cfg)
     assert result["ok"] is True
 
-    item = storage.list_candidates()[0]
+    item = storage.list_candidates(full=True)[0]
     assert item["overall_score"] == score_before      # 分数保留
     assert item["payload"]["detected_role_label"] == "前端开发"
 
@@ -708,3 +708,87 @@ def test_prompt_includes_extra_keywords_and_jd():
     assert "Kubernetes" in prompt
     assert "高并发" in prompt
     assert "负责订单系统的架构设计与性能优化" in prompt
+
+
+# ---------------------------------------------------------------- v3.2.0 回归
+
+def test_extract_json_surrounding_text_and_two_objects():
+    """模型在 JSON 前后加说明文字、或输出两个对象时，取第一个完整对象。"""
+    cases = {
+        '{"overall_score": 80}': {"overall_score": 80},
+        '说明文字 {"overall_score": 80} 结束': {"overall_score": 80},
+        '```json\n{"overall_score": 80}\n```': {"overall_score": 80},
+        '{"a": {"b": "{"}} 尾注 {"c": 1}': {"a": {"b": "{"}},
+        '{"t": "含 \\"转义\\" 和 } 花括号"}': {"t": '含 "转义" 和 } 花括号'},
+    }
+    for raw, expect in cases.items():
+        assert ai_engine._extract_json(raw) == expect, raw
+    assert ai_engine._extract_json("完全不是 JSON") is None
+
+
+def test_queue_not_ready_leaves_no_running(tmp_path, mock_ai, monkeypatch):
+    """AI 中途失效时，已领的记录不能永久卡在 running。"""
+    import time
+
+    base_url, _ = mock_ai
+    cfg = _ai_config(base_url)
+    for index in range(2):
+        services.import_files(
+            [str(_sample_file(tmp_path, f"n{index}.docx", SAMPLE.replace("李四", f"戊{index}")))],
+            cfg)
+
+    monkeypatch.setattr(ai_engine, "is_ready", lambda c: False)
+    QUEUE.start()
+    for _ in range(40):
+        time.sleep(0.2)
+        if QUEUE.state == "paused":
+            break
+
+    summary = storage.eval_summary()
+    assert summary["running"] == 0
+    assert summary["pending"] == 2
+    monkeypatch.undo()
+    QUEUE.stop_now()
+
+
+def test_statistics_sql_matches_legacy_semantics(mock_ai):
+    """SQL 版统计与原 Python 口径一致：只统计已评估记录。"""
+    done_id = storage.insert_candidate(
+        name="甲", filename="a.docx", stored_path="", file_hash="h1",
+        raw_text="x", payload={"overall_score": 90, "rarity": "SSR"}, eval_status="done")
+    storage.update_candidate(done_id, {"overall_score": 90, "rarity": "SSR",
+                                       "status": "pass", "summary": "s", "name": "甲"})
+    storage.insert_candidate(name="乙", filename="b.docx", stored_path="", file_hash="h2",
+                             raw_text="x", payload={"overall_score": 0}, eval_status="pending")
+    storage.set_review(done_id, "liked")
+
+    stats = services.statistics()
+    assert stats["total"] == 2
+    assert stats["evaluated"] == 1
+    assert stats["rarity_counts"] == {"R": 0, "SR": 0, "SSR": 1}
+    assert stats["status_counts"] == {"pass": 1, "flagged": 0, "rejected": 0}
+    assert stats["review_counts"]["liked"] == 1
+    assert stats["reviewed"] == 1
+    assert stats["avg_score"] == 90.0 and stats["max_score"] == 90.0
+    assert stats["pass_rate"] == 100.0 and stats["ssr_rate"] == 100.0
+    assert stats["best"]["name"] == "甲"
+
+
+def test_list_candidates_light_rows(tmp_path, cfg):
+    """列表行不带 payload（简历全文），但展示字段齐全；full=True 才带。"""
+    services.import_files([str(_sample_file(tmp_path))], cfg)
+    light = storage.list_candidates()[0]
+    assert "payload" not in light
+    for key in ("contact", "education_entries", "skills_text",
+                "score_source", "dimensions", "strengths"):
+        assert key in light, key
+    full = storage.list_candidates(full=True)[0]
+    assert "payload" in full and "sections" in full["payload"]
+
+
+def test_prompt_has_scoring_anchors():
+    """新提示词包含评分标尺与表达约束。"""
+    prompt = ai_engine.build_prompt("正文", config_module.normalize({"role": "backend"}))
+    assert "评分标尺" in prompt
+    assert "禁止套话" in prompt
+    assert "区分度" in prompt

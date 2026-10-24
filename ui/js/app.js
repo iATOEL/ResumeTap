@@ -176,9 +176,13 @@
     $('btnLoadSamples').addEventListener('click', loadSamples);
     $('btnExport').addEventListener('click', exportAll);
 
+    // 搜索防抖：大库下每次按键都重建列表会卡
+    const runSearch = debounce(() => {
+      if (state.view === 'library') renderLibrary();
+    }, 200);
     $('searchInput').addEventListener('input', (event) => {
       state.search = event.target.value.trim().toLowerCase();
-      if (state.view === 'library') renderLibrary();
+      runSearch();
     });
 
     // 侧栏稀有度
@@ -475,7 +479,8 @@
           const buffer = await file.arrayBuffer();
           const b64 = arrayBufferToBase64(buffer);
           const result = await call('import_bytes', file.name, b64);
-          applyPayload(result);
+          // 不在这里 applyPayload：每份都整列表刷新，批量导入会越来越卡，
+          // 结束后统一取一次列表
           const imported = result.imported || [];
           if (imported.length) okCount += imported.length;
           (result.duplicates || []).forEach((d) => {
@@ -492,7 +497,8 @@
     }
 
     if (okCount) toast(`成功导入 ${okCount} 份简历`, 'success');
-    failures.forEach((f) => toast(`${f.filename}：${f.error}`, 'error'));
+    failures.slice(0, 5).forEach((f) => toast(`${f.filename}：${f.error}`, 'error'));
+    if (failures.length > 5) toast(`另有 ${failures.length - 5} 个文件未导入`, 'warn');
     if (!okCount && !failures.length) toast('没有可导入的文件', 'warn');
 
     try {
@@ -841,7 +847,6 @@
 
   function screenCardHtml(item) {
     const rarity = item.rarity || 'R';
-    const payload = item.payload || {};
     const dims = item.dimensions || [];
     const strengths = item.strengths || [];
     const weaknesses = item.weaknesses || [];
@@ -870,7 +875,7 @@
         : '<span class="status-badge pass">通过</span>';
 
     // 联系方式：有就展示完整号码/邮箱，没有则明确标注
-    const contact = payload.contact || {};
+    const contact = item.contact || {};
     const phone = contact.phone || '';
     const email = contact.email || '';
     const contactHtml = `
@@ -884,8 +889,7 @@
       </div>`;
 
     // 教育经历：逐段列出院校全名 + 层级 + 专业 + 时间
-    const entries = payload.profile && payload.profile.education_entries
-      ? payload.profile.education_entries : [];
+    const entries = item.education_entries || [];
     const eduHtml = entries.length
       ? `<div class="edu-list">${entries.map((e) => `
           <div class="edu-item">
@@ -899,7 +903,7 @@
           </div>`).join('')}</div>`
       : '<div class="dim-note">简历中未识别到结构化的教育经历</div>';
 
-    const aiUsed = (payload.score_source === 'ai');
+    const aiUsed = (item.score_source === 'ai');
     const aiBadge = aiUsed
       ? `<span class="ai-badge" title="评分与优缺点由 AI 生成">AI 评估</span>`
       : '';
@@ -1213,7 +1217,7 @@
     const haystack = [
       item.name, item.filename, item.school, item.degree, item.summary,
       item.detected_role_label, item.major,
-      (((item.payload || {}).sections || {}).skills || '').slice(0, 800),
+      (item.skills_text || '').slice(0, 800),
     ].join(' ').toLowerCase();
     return haystack.includes(state.search);
   }
@@ -1281,20 +1285,25 @@
       const id = Number(node.dataset.id);
       node.addEventListener('click', (event) => {
         if (event.target.closest('.person-check')) {
-          if (state.selected.has(id)) state.selected.delete(id);
-          else state.selected.add(id);
-          renderLibrary();
+          toggleSelected(id);
           return;
         }
         openDrawer(id);
       });
       node.addEventListener('contextmenu', (event) => {
         event.preventDefault();
-        if (state.selected.has(id)) state.selected.delete(id);
-        else state.selected.add(id);
-        renderLibrary();
+        toggleSelected(id);
       });
     });
+    renderBulkBar();
+  }
+
+  /** 勾选/右键只改当前卡片样式，不整列表重建——大库下拖选会明显卡顿 */
+  function toggleSelected(id) {
+    if (state.selected.has(id)) state.selected.delete(id);
+    else state.selected.add(id);
+    const node = document.querySelector(`#libraryBody .person-card[data-id="${id}"]`);
+    if (node) node.classList.toggle('selected', state.selected.has(id));
     renderBulkBar();
   }
 
@@ -1305,7 +1314,7 @@
       : reviewed === 'passed' ? '<span class="status-badge rejected">不合适</span>'
       : reviewed === 'skipped' ? '<span class="status-badge flagged">稍后</span>' : '';
     // 技能标签取本地抽取的技能章节（AI 只给判断，不负责抄字段）
-    const skillText = ((item.payload || {}).sections || {}).skills || '';
+    const skillText = item.skills_text || '';
     const skillTags = skillText
       .split(/[、,，\n\/|]+/)
       .map((t) => t.trim())
@@ -1325,7 +1334,7 @@
           <div class="person-top">
             <span class="person-name">${escapeHtml(item.name)}</span>
             ${evaluated ? `<span class="rarity-badge ${rarity}">${item.rarity}</span>` : ''}
-            ${evaluated && item.payload && item.payload.score_source === 'ai' ? '<span class="ai-badge">AI</span>' : ''}
+            ${evaluated && item.score_source === 'ai' ? '<span class="ai-badge">AI</span>' : ''}
             ${!evaluated && !failed ? '<span class="status-badge flagged">待评估</span>' : ''}
             ${failed ? `<span class="eval-error-badge" title="${escapeHtml(item.eval_error || '')}">评估失败</span>` : ''}
             ${verdictChip}

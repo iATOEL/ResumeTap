@@ -87,7 +87,7 @@ RESUME_GACHA_DEBUG=1 .venv/Scripts/python.exe run_app.py
 .venv/Scripts/python.exe -m pytest -q
 ```
 
-当前共 51 项，分两个文件：
+当前共 56 项，分两个文件：
 
 | 文件 | 覆盖内容 |
 |---|---|
@@ -221,6 +221,12 @@ eval_queue.EvalQueue（串行）
 9. **发布前确认 zip 内没有 `data.db` / `config.yaml`**。
 10. **不要把密钥写进代码或提交**。`config.yaml`、`data/` 已在 `.gitignore` 中排除；
     新增依赖时同步更新 `requirements.txt`。
+11. **列表数据用轻量行**。`storage.list_candidates()` 默认不带 payload（含简历全文），
+    前端展示字段（联系方式/教育经历/技能文本/评分来源）已在行内顶层提供；
+    只有导出与对外 API 需要 `list_candidates(full=True)`。给列表加字段时遵循同样原则，
+    否则大库下每次刷新都会传输整库简历原文。
+12. **评估队列保持串行**。改动 `eval_queue.py` 时注意：就绪检查必须在领取之前；
+    新旧 worker 通过 `_gen` 代数交接，旧 worker 退位时不得改动共享状态。
 
 ---
 
